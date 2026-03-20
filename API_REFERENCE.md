@@ -35,12 +35,17 @@ This document describes **every module, every class, every function, and every d
 25. [Frozen Memory — C Extension (`frozen_memory.c`)](#25-frozen-memory--c-extension)
 26. [Frozen Memory — Python Fallback (`frozen_memory_fallback.py`)](#26-frozen-memory--python-fallback)
 27. [Hardware Protection Wrapper (`hardware_protection.py`)](#27-hardware-protection-wrapper)
+28. [Input Filter (`input_filter.py`)](#28-input-filter)
+29. [Adaptive Shield (`adaptive_shield.py`)](#29-adaptive-shield)
+30. [Truth Guard (`truth_guard.py`)](#30-truth-guard)
+31. [Conscience (`conscience.py`)](#31-conscience)
+32. [SIEM Logger (`siem_logger.py`)](#32-siem-logger)
 
 ---
 
 ## 1. Package Entry Point
 
-**File:** `sovereign_mcp/__init__.py` (99 lines)
+**File:** `sovereign_mcp/__init__.py` (114 lines)
 
 This file is the front door of the entire package. When anyone writes `import sovereign_mcp`, this is the first code that executes — and the very first thing it does is run a security check.
 
@@ -50,7 +55,7 @@ The environment variable `SOVEREIGN_MCP_SKIP_INTEGRITY` can bypass this check (u
 
 After the integrity gate passes, `__init__.py` imports and re-exports every public class and function from every module in the package. This means users can write `from sovereign_mcp import OutputGate` directly. The `__all__` list at the top explicitly declares every public name — there are no implicit exports.
 
-The file also defines `__version__` (currently `"0.1.0"`) and `__author__` (`"Mattijs Moens"`).
+The file also defines `__version__` (currently `"1.0.0"`) and `__author__` (`"Mattijs Moens"`).
 
 ---
 
@@ -848,4 +853,245 @@ The entire codebase follows a consistent set of design principles:
 
 ---
 
-*Total codebase: 27 modules, ~5,500 lines of Python + 418 lines of C. Zero external dependencies (stdlib only).*
+## 28. Input Filter
+
+**File:** `sovereign_mcp/input_filter.py` (533 lines)
+
+The Input Filter is a multi-decode anti-bypass input sanitization engine. It sanitizes all input before processing, blocking prompt injection, encoded payloads, LLM structural tokens, and high-entropy gibberish through a 9-layer deterministic pipeline.
+
+### The Pipeline
+
+Every input passes through these layers **in order**, stopping at the first block:
+
+0. **Invisible character stripping** -- Removes Unicode combining diacritics (`Mn` category), invisible format characters (`Cf` category), and replaces control characters (`Cc`) with spaces to preserve word boundaries. This defeats accent obfuscation attacks (e.g., `ignoree` with combining marks becomes `ignore`).
+
+1. **Unicode NFKC normalization + ASCII homoglyph folding** -- Standard NFKC first, then a custom `_ascii_fold()` map that converts Greek and Cyrillic homoglyphs to their ASCII equivalents (Greek `alpha` to `A`, Cyrillic `Es` to `C`, etc.). Defeats visual spoofing.
+
+2. **ANSI escape code stripping** -- Pre-compiled regex removes terminal escape sequences that could hide content from visual inspection.
+
+3. **Entropy/gibberish detection** -- Catches Base64 payloads (low space ratio + Base64 signature characters or trailing `=`), hex-with-spaces encoding, and low-vowel/low-space gibberish. URL text is excluded from analysis to prevent false positives on legitimate links.
+
+3.5. **Repetition flood detection** -- Blocks single-character floods (50+ identical chars) and word repetition attacks (same word 10+ times, >60% of content).
+
+4. **Raw escape sequence injection** -- Pre-compiled regex blocks `\uNNNN` and `\xNN` patterns that attempt to smuggle characters past normalization.
+
+5. **LLM structural token injection** -- Blocks ChatML (`<|im_start|>`), LLaMA (`[INST]`), and Llama2 (`<<SYS>>`) structural tokens used in prompt injection.
+
+5.5. **Persona hijack / jailbreak detection** -- Single-match regex catches DAN, "Do Anything Now", evil AI persona, developer mode, and content filter bypass patterns. One match is enough to block.
+
+6. **Keyword injection detection** -- Two tiers:
+   - **6a: High-confidence single-match** -- `IGNORE PREVIOUS`, `IGNORE ALL INSTRUCTIONS`, `DISREGARD ALL INSTRUCTIONS`, `OVERRIDE SYSTEM PROMPT`, `NEW SYSTEM PROMPT` trigger on a single hit.
+   - **6b: Standard 2+ threshold** -- Requires 2+ distinct bad-signal matches. The `DEFAULT_BAD_SIGNALS` list includes 120+ English keywords plus translations in 15 languages (Spanish, French, German, Portuguese, Chinese, Japanese, Korean, Russian, Arabic, Hindi, Italian, Dutch, Swedish, Norwegian, Finnish, Polish, Czech, Ukrainian, Turkish, Danish, Greek).
+
+6.5. **Word-level co-occurrence** -- Instead of requiring exact multi-word phrases, detects when ACTION verbs (`OVERRIDE`, `DISABLE`, `IGNORE`, etc. -- 31 verbs including multilingual) co-occur with TARGET nouns (`SAFETY`, `SECURITY`, `PROTOCOLS`, etc. -- 26 nouns including multilingual). Defeats word-insertion bypass.
+
+6.7. **Multi-decode expansion** -- Generates 5 decoded variants of the input (ROT13, reversed, leet-speak normalized, whitespace-collapsed, pig latin stripped) and re-runs keyword + co-occurrence detection on each variant.
+
+7. **Safe keyword bypass** -- Optional list of keywords that auto-pass safety checks for internal tool invocations.
+
+### `InputFilter` Class
+
+**`__init__(bad_signals, safe_keywords)`** -- `bad_signals` defaults to `DEFAULT_BAD_SIGNALS` (120+ keywords across 15+ languages). `safe_keywords` is an optional whitelist for internal tools.
+
+**`process(text, sender_id)`** -- The main entry point. Returns `(is_safe, result)` where `result` is either the cleaned text (safe) or the rejection reason (blocked).
+
+---
+
+## 29. Adaptive Shield
+
+**File:** `sovereign_mcp/adaptive_shield.py` (643 lines)
+
+A self-improving input security filter that wraps the `InputFilter` with local SQLite storage, missed-attack reporting, category-based keyword extraction, sandbox replay validation, and automatic rule deployment. Works entirely offline with zero cloud dependencies.
+
+### Architecture
+
+The Adaptive Shield implements a "self-expanding minefield" pattern: when a missed attack is reported, the system doesn't just block that exact input -- it extracts keywords, classifies the attack into a category, and expands blocking to cover the entire attack class. It also self-prunes: false positive reports automatically remove the learned keywords that caused the block.
+
+### Attack Categories
+
+7 predefined categories with keyword clusters:
+
+- **exfiltration** -- extract, dump, reveal, show, leak, expose, steal, etc.
+- **injection** -- execute, run, eval, system, shell, cmd, subprocess, etc.
+- **impersonation** -- i am the admin, override, bypass, emergency, superuser, etc.
+- **encoding_bypass** -- base64, hex, unicode, encode, decode, rot13, etc.
+- **data_access** -- password, credential, secret, api key, token, etc.
+- **persistence** -- scheduled, cron, backdoor, reverse shell, webhook, etc.
+- **destruction** -- delete, drop, truncate, destroy, wipe, rm -rf, etc.
+
+New categories are dynamically created from extracted keywords when no predefined category matches.
+
+### Database Schema
+
+Four SQLite tables: `scan_log` (all scan history), `reports` (missed attack reports), `rules` (exact-match patterns with false positive rates), `attack_categories` (learned category keywords).
+
+### `AdaptiveShield` Class
+
+**`__init__(db_path, extra_keywords, fp_threshold, retention_days, auto_deploy, allow_pruning)`** -- `fp_threshold` (default 1%) is the maximum false positive rate for auto-approving rules. `auto_deploy=True` means validated rules go live immediately. `allow_pruning=True` enables self-pruning on false positive reports.
+
+**`scan(text)`** -- Three-layer scan: (1) Built-in `InputFilter` with all multi-decode + multilingual checks, (2a) Custom adaptive rules from the rules DB (2+ matches required), (2b) Category keyword matching against both predefined and learned keywords (2+ matches per category required). Returns `{scan_id, allowed, stage, reason, clean_input, latency_ms}`.
+
+**`report(scan_id, reason)`** -- Reports a missed attack. The system: (1) looks up the original input, (2) extracts keywords via `_extract_keywords()` (strips stopwords, requires 3+ chars), (3) classifies into an attack category via `_classify_attack()`, (4) validates each keyword against historical benign traffic, (5) sandbox-replays the exact pattern against all historical allowed scans, (6) auto-deploys if false positive rate is below threshold. Returns `{report_id, status, rule_created, category, new_keywords, sandbox_result}`.
+
+**`report_false_positive(scan_id, reason)`** -- Self-pruning: identifies the learned keywords that caused the block and removes them from the category. Predefined `ATTACK_CATEGORIES` keywords are never removed (immutable). Returns `{status, pruned_keywords, category}`.
+
+**`stats`** -- Property: `{total_scans, blocked, approved_rules, pending_rules, custom_rules_loaded, category_keywords}`.
+
+---
+
+## 30. Truth Guard
+
+**File:** `sovereign_mcp/truth_guard.py` (471 lines)
+
+Factual hallucination detection engine. Detects when an AI agent makes factual claims without having verified them through tools, and builds a self-improving verified fact cache over time.
+
+### Confidence Marker Detection
+
+Four pre-compiled regex pattern categories detect factual claims:
+
+- **Temporal markers** -- "currently", "right now", "as of today", "latest", "real-time"
+- **Numerical claims** -- Dollar amounts, percentages, large numbers ("$84,322", "15%", "3 billion"). Trivial numbers (step counts, option numbering) are excluded.
+- **Citation markers** -- "according to", "studies show", "research indicates", "experts say", "peer-reviewed". These indicate the model is claiming to reference sources without having verified them.
+- **Certainty markers** -- "the answer is", "it is exactly", "I can confirm", "without doubt", "I have verified"
+
+A fifth pattern detects **hedging language** (appropriate uncertainty): "I'm not sure", "maybe", "approximately", "I'd need to check". Hedging is the GOOD behavior -- it means the model is being honest about uncertainty.
+
+### Verification Logic
+
+`check_answer(session_id, answer_text)` applies this decision tree:
+
+1. **No markers** -- allow (opinion/chat, not a factual claim)
+2. **Markers + hedging** -- allow (appropriate uncertainty expressed)
+3. **Markers + verification tool used this session** -- allow (the model looked it up)
+4. **Markers + cached fact** -- allow (previously verified, still within TTL)
+5. **Otherwise** -- BLOCK (unverified factual claim)
+
+### Verified Fact Cache
+
+SQLite-backed cache with TTL. Temporal claims (containing "currently", "right now", etc.) get a short TTL (default 7 days). Static facts get a longer TTL (default 90 days). Facts are keyed by a normalized SHA-256 hash of the claim text (punctuation stripped, lowercased, whitespace collapsed).
+
+### `TruthGuard` Class
+
+**`__init__(db_path, verification_tools, fact_ttl_days, static_fact_ttl_days, retention_days, enabled)`** -- `verification_tools` defaults to `{"SEARCH", "BROWSE", "READ_FILE", "LOOKUP", "QUERY", "WEB_SEARCH", "GOOGLE", "FETCH", "API_CALL"}`.
+
+**`start_session(session_id)` / `end_session(session_id)`** -- Session lifecycle management.
+
+**`record_tool_use(session_id, tool_name, query, result_summary)`** -- Records that a verification tool was used. Stored both in memory (fast lookup) and SQLite (persistence).
+
+**`check_answer(session_id, answer_text)`** -- Main entry point. Returns `(allowed, reason)`.
+
+**`store_verified_fact(claim_text, source, tool_used, ttl_days)`** -- Manually stores a verified fact in the cache.
+
+**`lookup_fact(claim_text)`** -- Checks if a fact has been previously verified and is still within TTL.
+
+**`detect_confidence_markers(text)`** -- Static method. Returns list of marker types found: `["temporal", "numerical", "citation", "certainty"]`.
+
+**`stats`** -- Property: `{total_checks, total_allowed, total_blocked, cached_facts, active_sessions}`.
+
+---
+
+## 31. Conscience
+
+**File:** `sovereign_mcp/conscience.py` (239 lines)
+
+Ethical evaluation engine with immutable directives enforced via `FrozenNamespace`. The `Conscience` class itself uses `FrozenNamespace` as its metaclass, making all ethical directives physically immutable at runtime.
+
+### Ethical Directives
+
+Three directives stored as frozen class attributes:
+
+- **TRUTH_DIRECTIVE** -- The system must not deceive, hallucinate, or obfuscate reality.
+- **HARM_DIRECTIVE** -- Any action that harms, degrades, or endangers humans is invalid.
+- **SILENCE_DIRECTIVE** -- Internal architecture, source code, and core logic must never be revealed.
+
+### Detection Patterns
+
+Four pre-compiled regex pattern sets:
+
+- **Deception/social engineering** (`_LIE_WORDS_PATTERN`) -- 22 patterns: LIE, FAKE, TRICK, PRETEND, ROLEPLAY, FABRICATE, DECEIVE, MANIPULATE, GASLIGHT, FRAUD, SCAM, etc.
+- **Fake tool injection** (`_FAKE_TOOL_PATTERN`) -- Catches unauthorized tool invocation syntax like `<TOOL_NAME(args)>` or `TOOL_NAME(args)`.
+- **Harmful intent** (`_BAD_WORDS_PATTERN`) -- 24 patterns: KILL, HURT, DESTROY, STEAL, HACK, VIRUS, BOMB, MALICIOUS, GENOCIDE, WEAPON, etc.
+- **IP extraction** (`_IP_WORDS_PATTERN`) -- 17 patterns: YOUR SOURCE CODE, SYSTEM PROMPT, REVEAL CODE, HOW DO YOU WORK, YOUR ARCHITECTURE, etc.
+
+### Hash Integrity Seal
+
+**`initialize(data_dir)`** -- On first run, computes SHA-256 of the module's own source file and writes it to a `.conscience_lock` lockfile. On subsequent runs, verifies the current source hash matches the lockfile. Hash mismatch raises `RuntimeError` (fail-closed).
+
+**`verify_integrity()`** -- Called before every `evaluate_action()`. Uses a 60-second cache TTL to avoid re-reading the file on every call.
+
+### `Conscience` Class (FrozenNamespace metaclass)
+
+**`evaluate_action(action, context, exempt_actions, creative_exempt_actions, additional_ip_words)`** -- Seven-step evaluation:
+
+1. **Creative exemption** -- If the action is in `creative_exempt_actions`, bypass all checks.
+2. **Deception detection** -- Regex scan for lie/manipulation words.
+3. **Fake tool injection** -- Regex scan for unauthorized tool syntax (exempt actions like REFLECT, MEDITATE, THINK are skipped).
+4. **Harm reduction** -- Regex scan for harmful intent keywords.
+5. **Security evasion** -- String matching against 27 evasion phrases: BYPASS, IGNORE DIRECTIVE, DISABLE SAFETY, NO RESTRICTIONS, FULLY UNLOCKED, etc.
+6. **Self-preservation** -- Blocks DELETE combined with SELF, SYSTEM, CONSCIENCE, or LOCKFILE.
+7. **IP protection** -- Regex scan for source code / architecture extraction attempts. Supports additional custom IP keywords.
+
+Returns `(approved, reason)`.
+
+---
+
+## 32. SIEM Logger
+
+**File:** `sovereign_mcp/siem_logger.py` (234 lines)
+
+Structured security event logger for SIEM platform integration (Splunk, Elastic, QRadar, Sentinel). Supports CEF (Common Event Format) and structured JSON output. AISVS-compliant (C13.2.2).
+
+### Severity Levels
+
+CEF-standard 1-10 scale with named constants: `INFO` (1), `LOW` (3), `MEDIUM` (5), `HIGH` (7), `VERY_HIGH` (8), `CRITICAL` (10).
+
+### Default Event Severity Map
+
+17 event types with pre-assigned severities:
+
+- **CRITICAL** -- `integrity_violation`, `killswitch_activated`, `privilege_violation`
+- **VERY_HIGH** -- `code_exfiltration`, `malware_syntax`
+- **HIGH** -- `input_blocked`, `injection_detected`, `hallucination_blocked`, `consensus_mismatch`, `truth_guard_block`
+- **MEDIUM** -- `ethical_violation`, `approval_requested`, `approval_denied`, `adaptive_rule_deployed`
+- **LOW** -- `rate_limited`
+- **INFO** -- `action_allowed`, `approval_granted`
+
+### `SIEMLogger` Class
+
+**`__init__(output_path, format, device_vendor, device_product, device_version, max_file_size_mb)`** -- `format` is `"json"` or `"cef"`. Default output path is `logs/siem_events.log`. Creates the log directory if it doesn't exist. Thread-safe via `threading.Lock()`.
+
+**`log_event(event_type, action_type, payload_summary, source_component, session_id, user_id, model_version, reason, severity, extra)`** -- Main logging method. Auto-assigns severity from the event severity map if not provided. Payload summaries are truncated to 500 characters. Returns the formatted event record.
+
+**`_to_cef(event)`** -- Formats an event as CEF with proper header escaping (`|` and `\` in headers, `=`, `\n` in extensions). Maps fields to CEF standard extensions: `act`, `externalId`, `suser`, `cs1`/`cs1Label`, `msg`, `rt`.
+
+**`_write_line(line)`** -- Thread-safe file write with size-based log rotation. When the log file exceeds `max_file_size_mb` (default 50MB), it's renamed with a Unix timestamp suffix and a new file is started.
+
+**`log_block(source_component, action_type, reason)` / `log_allow(source_component, action_type, reason)`** -- Convenience shortcuts for logging blocked/allowed actions.
+
+**`stats`** -- Property: `{lines, size_kb, format, output_path}`.
+
+---
+
+## Architecture Summary
+
+The entire codebase follows a consistent set of design principles:
+
+1. **Fail-safe defaults** -- Unknown input -> decline. Missing config -> most restrictive. Timeout -> deny. NaN/Infinity -> reject.
+
+2. **Immutability** -- Tool definitions are frozen via `FrozenNamespace` metaclass. Mutable containers are deep-copied on access (with caching for performance). Results are immutable via `__slots__` + `object.__setattr__()` + `__delattr__()`. The identity registry uses `MappingProxyType`. Patterns are pre-compiled into frozen tuples via factory functions.
+
+3. **Constant-time comparisons** -- Every hash comparison uses `hmac.compare_digest()` to prevent timing attacks. The C extension has its own `constant_time_compare()`.
+
+4. **Deterministic decisions** -- Every accept/reject is a deterministic comparison: hashes match or don't, schemas validate or don't, patterns are found or aren't. The LLMs in consensus are probabilistic, but the DECISION (hash comparison) is deterministic.
+
+5. **Defense in depth** -- Multiple independent checks, any of which can reject. Schema validation + deception detection + PII scanning + content safety + consensus verification. Input sanitization + input validation.
+
+6. **Thread safety** -- All shared state is protected by `threading.Lock()`. Critical sections are as small as possible. TOCTOU prevention in incident escalation.
+
+7. **Audit trail** -- Hash-chained log for tamper detection. Every verification decision logged. Every incident captured with forensic data.
+
+8. **Self-improvement** -- Adaptive Shield learns from missed attacks and self-prunes on false positives. Truth Guard builds a verified fact cache over time. Both use local SQLite with zero cloud dependencies.
+
+---
+
+*Total codebase: 32 modules, ~7,600 lines of Python + 418 lines of C. Zero external dependencies (stdlib only).*

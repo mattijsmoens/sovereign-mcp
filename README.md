@@ -581,10 +581,10 @@ Every component in the decision path:
 | `frozen_memory_fallback.py` | ctypes fallback — same OS protection without compilation. | ~327 |
 | `integrity_lock.py` | Supply-chain defense. SHA-256 lockfile for .py/.c/.pyd/.so files. | ~308 |
 | `input_filter.py` | 9-layer multi-decode anti-bypass input sanitization. Persona hijack, multilingual keywords (15 languages), co-occurrence detection. | ~530 |
-| `adaptive_shield.py` | Self-learning security filter. Attack reporting, rule generation, sandbox testing, auto-deploy. | ~600 |
-| `truth_guard.py` | Hallucination detection. Tracks verification tool usage, blocks unverified factual claims. SQLite cache. | ~450 |
-| `conscience.py` | Ethical evaluation engine. Multi-factor harm assessment with configurable thresholds. | ~260 |
-| `siem_logger.py` | Structured security event logging. CEF/JSON output for Splunk, Elastic, QRadar. 17 event types. | ~220 |
+| `adaptive_shield.py` | Self-learning security filter. Attack reporting, rule generation, sandbox testing, auto-deploy. | ~640 |
+| `truth_guard.py` | Hallucination detection. Tracks verification tool usage, blocks unverified factual claims. SQLite cache. | ~470 |
+| `conscience.py` | Ethical evaluation engine. Multi-factor harm assessment with configurable thresholds. | ~240 |
+| `siem_logger.py` | Structured security event logging. CEF/JSON output for Splunk, Elastic, QRadar. 17 event types. | ~235 |
 
 ---
 

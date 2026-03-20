@@ -2,6 +2,19 @@
 
 All notable changes to sovereign-mcp are documented here.
 
+## [1.0.0] — 2026-03-20
+
+### First PyPI Release
+
+Initial public release on PyPI. 27 modules, 4 defense layers, 3 data poisoning countermeasures.
+
+- All v0.1.x pre-release changes (below) included
+- Added Patent Pending badge to README
+- Added 5 missing modules to README Module Reference table (input_filter, adaptive_shield, truth_guard, conscience, siem_logger)
+- Created MANIFEST.in for clean PyPI packaging
+- Regenerated integrity lockfile (32 files sealed)
+- `pyproject.toml` updated with email, package-data, Beta classifier
+
 ## [0.1.2] — 2026-03-19
 
 ### InputFilter Detection Improvements — Adversarial Benchmark Hardening
