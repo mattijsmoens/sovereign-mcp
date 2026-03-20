@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-mcp"
+version = "1.0.0"
+description = "Deterministic MCP Security Architecture. FrozenNamespace as Root of Trust for Model Context Protocol tool verification."
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Mattijs Moens", email = "moenster007@proton.me"}
+]
+keywords = [
+    "mcp-security",
+    "ai-security",
+    "deterministic-verification",
+    "tool-verification",
+    "frozen-namespace",
+    "prompt-injection",
+    "consensus-verification",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/mattijsmoens/sovereign-mcp"
+
+[tool.setuptools.packages.find]
+include = ["sovereign_mcp*"]
+
+[tool.setuptools.package-data]
+sovereign_mcp = ["*.c", "*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

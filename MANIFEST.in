@@ -1,0 +1,27 @@
+include LICENSE
+include README.md
+include CHANGELOG.md
+include SECURITY.md
+include API_REFERENCE.md
+
+recursive-include sovereign_mcp *.py *.c *.json
+
+# Exclude trash files
+exclude adaptive.db
+exclude benchmark_results.csv
+exclude Untitled-1.txt
+exclude del
+exclude regen_lock.py
+exclude adversarial_benchmark.py
+exclude test_live_e2e.py
+exclude setup.py
+
+# Exclude directories
+prune data
+prune __pycache__
+prune .pytest_cache
+prune dist
+prune build
+prune *.egg-info
+prune sovereign_mcp/__pycache__
+prune tests
