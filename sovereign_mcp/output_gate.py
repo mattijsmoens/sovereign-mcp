@@ -167,27 +167,6 @@ class OutputGate:
                 self._log_incident(tool_name, result, "HIGH")
                 return result
 
-        # --- Social Engineering Detection (LLM Consensus, Optional) ---
-        if self._social_engineering_detector and input_params is not None:
-            # Scan input text fields for social engineering
-            text_to_scan = " ".join(
-                str(v) for v in input_params.values() if isinstance(v, str)
-            )
-            if text_to_scan.strip():
-                se_result = self._social_engineering_detector.scan(text_to_scan)
-                if not se_result.safe:
-                    elapsed = (time.time() - start) * 1000
-                    result = GateResult(
-                        accepted=False,
-                        layer="social_engineering",
-                        reason=se_result.reason,
-                        latency_ms=elapsed,
-                        layers_passed=layers_passed,
-                    )
-                    self._log_incident(tool_name, result, "HIGH")
-                    return result
-                layers_passed.append("SE")
-
         # --- Layer A: Schema Validation ---
         if isinstance(tool_output, dict):
             valid_a, reason_a = SchemaValidator.validate_output(
@@ -266,6 +245,28 @@ class OutputGate:
             self._log_incident(tool_name, result, "HIGH")
             return result
         layers_passed.append("SAFETY")
+
+        # --- Social Engineering Detection (LLM Consensus, Optional) ---
+        # Runs AFTER deterministic layers to avoid expensive LLM calls
+        # on inputs that schema/deception/PII/content checks already block.
+        if self._social_engineering_detector and input_params is not None:
+            text_to_scan = " ".join(
+                str(v) for v in input_params.values() if isinstance(v, str)
+            )
+            if text_to_scan.strip():
+                se_result = self._social_engineering_detector.scan(text_to_scan)
+                if not se_result.safe:
+                    elapsed = (time.time() - start) * 1000
+                    result = GateResult(
+                        accepted=False,
+                        layer="social_engineering",
+                        reason=se_result.reason,
+                        latency_ms=elapsed,
+                        layers_passed=layers_passed,
+                    )
+                    self._log_incident(tool_name, result, "HIGH")
+                    return result
+                layers_passed.append("SE")
 
         # --- Domain Check (Check 5) ---
         if self._domain_checker:
