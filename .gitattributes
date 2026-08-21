@@ -1,0 +1,19 @@
+# The integrity lockfile hashes raw file bytes, so the repository must be
+# byte-stable across platforms. Without this, git normalized line endings on
+# checkout and every clone failed verify_integrity() at import: the lockfile
+# was sealed against CRLF working-tree bytes while clones received LF.
+* text=auto eol=lf
+
+*.py   text eol=lf
+*.c    text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.in   text eol=lf
+*.toml text eol=lf
+
+# Never touch binaries.
+*.pyd  binary
+*.so   binary
+*.whl  binary
+*.gz   binary
+*.db   binary
