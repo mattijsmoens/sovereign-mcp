@@ -26,6 +26,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Capabilities a newly discovered tool may not claim without an explicit
+# policy saying otherwise. Dynamic discovery is the least trusted entry point
+# in the system, so it defaults to deny for anything that grants execution,
+# privilege or unrestricted filesystem access.
+_DEFAULT_BLOCKED_CAPABILITIES = (
+    "shell_exec", "shell", "exec", "execute", "eval",
+    "admin", "sudo", "root", "superuser",
+    "write_system", "delete_file", "format_disk",
+    "network_scan", "raw_socket",
+)
+
+
 class SandboxTool:
     """A tool in the sandbox with its current state."""
 
@@ -155,7 +167,13 @@ class SandboxRegistry:
             results["checks_passed"].append("capabilities_count")
 
         # Check 2: Blocked capabilities
-        blocked = self._policies.get("blocked_capabilities", [])
+        # A default-constructed SandboxRegistry previously had an EMPTY
+        # blocklist, so every tool "passed" no_blocked_capabilities without
+        # anything ever being checked - including one declaring shell_exec.
+        # Reporting a check as passed when it did not run is worse than not
+        # having it, so there is now a default-deny baseline that an explicit
+        # policy can still override.
+        blocked = self._policies.get("blocked_capabilities", _DEFAULT_BLOCKED_CAPABILITIES)
         blocked_lower = {b.lower() for b in blocked}
         for cap in capabilities:
             if cap.lower() in blocked_lower:
@@ -189,14 +207,21 @@ class SandboxRegistry:
         else:
             results["checks_passed"].append("description_length")
 
-        # Check for suspicious patterns in description
-        import re
-        _SUSPICIOUS_DESC = re.compile(
-            r"(?i)(ignore\s+previous|system\s*:|<script|eval\(|exec\()",
-        )
-        if _SUSPICIOUS_DESC.search(description):
+        # Check for suspicious patterns in description.
+        #
+        # This used to be a five-pattern regex defined inline, whose injection
+        # rule was r"ignore\s+previous" - so "IGNORE ALL PREVIOUS INSTRUCTIONS"
+        # did not match, and a poisoned tool was reported as
+        # "description_clean". Description poisoning is vulnerability #2 in
+        # this project's own threat list, and the sandbox is what feeds the
+        # freeze. Use the package's real detector rather than a private
+        # reimplementation of a fraction of it.
+        from sovereign_mcp.deception_detector import DeceptionDetector
+        desc_clean, desc_detections = DeceptionDetector.scan(description)
+        if not desc_clean:
+            categories = sorted({d.get("category", "?") for d in desc_detections})
             results["checks_failed"].append(
-                "Description contains suspicious patterns"
+                f"Description contains suspicious patterns: {categories}"
             )
         else:
             results["checks_passed"].append("description_clean")

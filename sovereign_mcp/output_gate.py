@@ -15,6 +15,7 @@ If ANY layer fails: DECLINED. Default deny. No exceptions.
 import time
 import logging
 from sovereign_mcp.schema_validator import SchemaValidator
+from sovereign_mcp.permission_checker import PermissionChecker
 from sovereign_mcp.deception_detector import DeceptionDetector
 from sovereign_mcp.pii_detector import PIIDetector
 from sovereign_mcp.content_safety import ContentSafety
@@ -43,7 +44,8 @@ class OutputGate:
                  rate_limiter=None, consensus_cache=None,
                  identity_checker=None, domain_checker=None,
                  input_sanitizer=None, incident_responder=None,
-                 social_engineering_detector=None):
+                 social_engineering_detector=None,
+                 scan_output_for_anti_patterns=False):
         """
         Args:
             frozen_registry: FrozenRegistry from ToolRegistry.freeze().
@@ -58,6 +60,12 @@ class OutputGate:
             input_sanitizer: InputSanitizer class (optional, Check 12).
             incident_responder: IncidentResponder instance (optional, Stage 4).
             social_engineering_detector: SocialEngineeringDetector instance (optional).
+            scan_output_for_anti_patterns: If True, run AntiPatternDetector over
+                the tool's OUTPUT instead of its input parameters. These are
+                agent-behaviour patterns, so the call is the correct target;
+                scanning output false-declines legitimate data such as base64
+                images, long tokens, and documentation that mentions shell
+                commands. Kept as an opt-in for backward compatibility.
         """
         self._registry = frozen_registry
         self._consensus = consensus_verifier
@@ -71,15 +79,24 @@ class OutputGate:
         self._input_sanitizer = input_sanitizer
         self._incident_responder = incident_responder
         self._social_engineering_detector = social_engineering_detector
+        self._scan_output_for_anti_patterns = scan_output_for_anti_patterns
 
-    def verify(self, tool_name, tool_output, input_params=None):
+    def verify(self, tool_name, tool_output, input_params=None,
+               identity_id=None, identity_token=None,
+               action=None, target=None):
         """
-        Run the full four-layer verification on tool output.
+        Run the full verification chain over a tool call and its output.
 
         Args:
             tool_name: Name of the MCP tool that produced the output.
             tool_output: Dict of output data from tool execution.
-            input_params: Dict of input parameters (for value constraint checking).
+            input_params: Dict of input parameters. Validated against the frozen
+                INPUT schema and, when configured, sanitized and value-checked.
+            identity_id: Caller identity. Required when an identity_checker is
+                configured — the call is declined without it.
+            identity_token: Caller's authentication token.
+            action / target: The action being performed and the resource it
+                touches, for PermissionChecker. Checked when both are supplied.
 
         Returns:
             GateResult with accepted/declined status, which layer triggered,
@@ -151,6 +168,70 @@ class OutputGate:
             self._log_incident(tool_name, result, "CRITICAL")
             return result
 
+        def _decline(layer, reason, severity):
+            elapsed_ms = (time.time() - start) * 1000
+            res = GateResult(accepted=False, layer=layer, reason=reason,
+                             latency_ms=elapsed_ms, layers_passed=layers_passed)
+            self._log_incident(tool_name, res, severity)
+            return res
+
+        # --- Check 9: Caller Identity ---
+        # Previously the checker was stored on the instance and never called,
+        # so configuring one bought nothing while looking like authentication.
+        if self._identity_checker:
+            if identity_id is None:
+                return _decline(
+                    "identity",
+                    "An identity_checker is configured but no identity_id was "
+                    "supplied. Declining rather than skipping authentication.",
+                    "CRITICAL",
+                )
+            id_ok, id_reason = self._identity_checker.verify(
+                identity_id, identity_token or "", tool_name
+            )
+            if not id_ok:
+                return _decline("identity", id_reason, "CRITICAL")
+            layers_passed.append("IDENTITY")
+
+        # --- Check 12: Input Sanitization ---
+        # Also previously stored and never called. Modified input is treated as
+        # evidence and declined rather than silently rewritten, because this
+        # gate is default-deny and altering parameters would change the meaning
+        # of the call after it had been authorized.
+        if self._input_sanitizer and isinstance(input_params, dict):
+            _sanitized, changes = self._input_sanitizer.sanitize_params(input_params)
+            if changes:
+                return _decline(
+                    "input_sanitizer",
+                    f"Input parameters required sanitization: {changes}",
+                    "HIGH",
+                )
+            layers_passed.append("SANITIZE")
+
+        # --- Step 2: Input Schema Validation ---
+        # SchemaValidator.validate_input existed, was exported, and was
+        # documented as step 2 of the chain - but was never called from
+        # anywhere. Without it, input types, enums, alpha_only, lengths and
+        # unknown-parameter rejection were all unenforced, which is how a
+        # string "1000" slipped past a numeric ceiling: ValueConstraintChecker
+        # skips non-numeric values, and nothing else looked at the type.
+        if input_params is not None and tool.INPUT_SCHEMA:
+            in_ok, in_reason = SchemaValidator.validate_input(
+                input_params, tool.INPUT_SCHEMA
+            )
+            if not in_ok:
+                return _decline("input_schema", in_reason, "MEDIUM")
+            layers_passed.append("INPUT")
+
+        # --- Step 3: Permission Check ---
+        if action is not None and target is not None:
+            perm_ok, perm_reason = PermissionChecker.check(
+                tool_name, action, target, self._registry
+            )
+            if not perm_ok:
+                return _decline("permissions", perm_reason, "HIGH")
+            layers_passed.append("PERM")
+
         # --- Value Constraint Check (Countermeasure 1) ---
         if self._value_checker and input_params is not None and tool.VALUE_CONSTRAINTS:
             vc_passed, vc_reason = self._value_checker.check(
@@ -191,8 +272,21 @@ class OutputGate:
         layers_passed.append("A")
 
         # --- Layer Anti-Pattern: AI Failure Mode Interception ---
-        if isinstance(tool_output, dict):
-            is_clean, ap_detections = AntiPatternDetector.scan_dict(tool_output, tool_name)
+        # Scanned against the tool CALL, not the tool's response.
+        #
+        # These patterns describe what an agent is about to *do* - `git add .`,
+        # a bare `cd`, `npm install` without -y, a 500-char blob written to a
+        # file. Applying them to what a tool *returns* is a category error, and
+        # produced false declines on ordinary data: an image tool's base64
+        # thumbnail read as "binary hallucination", documentation explaining
+        # `git add .` read as greedy-git, any prose containing "cd " read as a
+        # cd-trap, and any long opaque token (JWT, API key, hash) read as a
+        # binary hallucination.
+        #
+        # Set scan_output_for_anti_patterns=True to restore the old behaviour.
+        ap_target = tool_output if self._scan_output_for_anti_patterns else input_params
+        if isinstance(ap_target, dict):
+            is_clean, ap_detections = AntiPatternDetector.scan_dict(ap_target, tool_name)
             if not is_clean:
                 elapsed = (time.time() - start) * 1000
                 ap_summary = ", ".join(
@@ -313,7 +407,7 @@ class OutputGate:
             # Check consensus cache first (Phase 9 optimization)
             cached = None
             if self._consensus_cache and input_params:
-                cached = self._consensus_cache.get(tool_name, input_params)
+                cached = self._consensus_cache.get(tool_name, input_params, tool_output)
 
             if cached:
                 # Use cached consensus result
@@ -344,7 +438,7 @@ class OutputGate:
                 # Cache the result for future calls
                 if self._consensus_cache and input_params:
                     self._consensus_cache.put(
-                        tool_name, input_params, consensus_result
+                        tool_name, input_params, tool_output, consensus_result
                     )
 
                 if not consensus_result.match:

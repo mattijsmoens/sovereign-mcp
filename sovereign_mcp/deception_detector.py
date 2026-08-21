@@ -29,9 +29,22 @@ _ZERO_WIDTH_CHARS = re.compile(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u2060\u20
 # Category 1: Direct injection phrases
 _INJECTION_PHRASES = [
     # English
-    r"IGNORE\s+(ALL\s+)?PREVIOUS\s+(INSTRUCTIONS?|PROMPTS?|RULES?|DIRECTIVES?)",
-    r"DISREGARD\s+(ALL\s+)?PREVIOUS",
-    r"FORGET\s+(ALL\s+)?PREVIOUS",
+    # "Previous" is only one way to say it. These patterns used to require
+    # that literal word, so "disregard prior rules" and "ignore the above"
+    # — the same attack, phrased naturally — went undetected.
+    # _PRIOR_REF covers the common referents; _INSTRUCTION_NOUN the objects.
+    r"IGNORE\s+(?:ALL\s+|ANY\s+|THE\s+)?"
+    r"(?:PREVIOUS|PRIOR|EARLIER|PRECEDING|FOREGOING|ABOVE)"
+    r"(?:\s+(?:INSTRUCTIONS?|PROMPTS?|RULES?|DIRECTIVES?|DIRECTIONS?|GUIDELINES?))?",
+    r"DISREGARD\s+(?:ALL\s+|ANY\s+|THE\s+)?"
+    r"(?:PREVIOUS|PRIOR|EARLIER|PRECEDING|FOREGOING|ABOVE)"
+    r"(?:\s+(?:INSTRUCTIONS?|PROMPTS?|RULES?|DIRECTIVES?|DIRECTIONS?|GUIDELINES?))?",
+    r"FORGET\s+(?:ALL\s+|ANY\s+|THE\s+)?"
+    r"(?:PREVIOUS|PRIOR|EARLIER|PRECEDING|FOREGOING|ABOVE|EVERYTHING)"
+    r"(?:\s+(?:INSTRUCTIONS?|PROMPTS?|RULES?|DIRECTIVES?|DIRECTIONS?|GUIDELINES?))?",
+    # Also catch the object without a referent: "ignore all instructions".
+    r"(?:IGNORE|DISREGARD|FORGET)\s+(?:ALL\s+|ANY\s+|THE\s+)?"
+    r"(?:INSTRUCTIONS?|PROMPTS?|RULES?|DIRECTIVES?|DIRECTIONS?|GUIDELINES?)",
     r"NEW\s+INSTRUCTIONS?",
     r"OVERRIDE\s+(ALL\s+)?INSTRUCTIONS?",
     r"(?:^|[\.\!\?]\s+)SYSTEM\s*:\s*",

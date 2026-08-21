@@ -143,22 +143,28 @@ class TestFullPipelineEndToEnd(unittest.TestCase):
         result = gate.verify(
             "transfer_money",
             {"transaction_id": "txn", "amount": 50000, "status": "success"},
-            input_params={"amount": 50000},
+            input_params={"from_account": "A", "to_account": "B", "amount": 50000},
         )
         self.assertFalse(result.accepted)
         self.assertEqual(result.layer, "value_constraints")
 
-    def test_nan_amount_blocked_at_value_constraints(self):
-        """NaN amount should be caught by value constraints."""
+    def test_nan_amount_blocked(self):
+        """NaN amount must be rejected.
+
+        Two independent defences reject it: input schema validation (which
+        rejects non-finite numbers) and the value constraint check. Schema
+        validation now runs first, per the documented step order, so assert
+        the rejection rather than which of the two fires.
+        """
         frozen, gate, _, _, _ = self._build_pipeline()
 
         result = gate.verify(
             "transfer_money",
             {"transaction_id": "txn", "amount": 50, "status": "success"},
-            input_params={"amount": float("nan")},
+            input_params={"from_account": "A", "to_account": "B", "amount": float("nan")},
         )
         self.assertFalse(result.accepted)
-        self.assertEqual(result.layer, "value_constraints")
+        self.assertIn(result.layer, ("input_schema", "value_constraints"))
         self.assertIn("not a valid finite number", result.reason)
 
     def test_infinity_amount_blocked(self):
@@ -168,10 +174,12 @@ class TestFullPipelineEndToEnd(unittest.TestCase):
         result = gate.verify(
             "transfer_money",
             {"transaction_id": "txn", "amount": 50, "status": "success"},
-            input_params={"amount": float("inf")},
+            input_params={"from_account": "A", "to_account": "B", "amount": float("inf")},
         )
         self.assertFalse(result.accepted)
-        self.assertEqual(result.layer, "value_constraints")
+        # Rejected by input schema validation or the value constraint check;
+        # both refuse non-finite numbers. See test_nan_amount_blocked.
+        self.assertIn(result.layer, ("input_schema", "value_constraints"))
 
     def test_consensus_mismatch_blocks_high_risk(self):
         """Consensus mismatch should block HIGH-risk tools."""

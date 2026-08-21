@@ -147,6 +147,8 @@ Every time an MCP tool is invoked, the following verification chain executes:
 Tool Call
    │
    ├─ Step 1: Tool Identity Check ──────── Is it registered? Hash match?
+   ├─ Step 1b: Caller Identity ─────────── Who is calling? (if configured)
+   ├─ Step 1c: Input Sanitization ──────── Params free of injection markers?
    ├─ Step 2: Input Validation ──────────── Matches frozen input schema?
    ├─ Step 3: Permission Check ──────────── Capability + target allowed?
    ├─ Step 4: Value Constraint Check ────── Within frozen numeric limits?
@@ -154,7 +156,7 @@ Tool Call
    ├─ [Tool Executes]
    │
    ├─ Step 5: Layer A - Schema Check ────── Output matches frozen schema?
-   ├─ Step 6: Layer AP - Anti-Patterns ──── Output free of AI failure modes?
+   ├─ Step 6: Layer AP - Anti-Patterns ──── Call free of AI failure modes?
    ├─ Step 7: Layer B - Deception Scan ──── Known injection patterns?
    ├─ Step 8: Layer C - JSON Consensus ──── N-model hash match?
    └─ Step 9: Layer D - Behavioral Floor ── Within frozen capability set?
@@ -164,6 +166,30 @@ Tool Call
 ```
 
 If **any** check fails at **any** step: the tool call is **DECLINED**. Default deny. No exceptions. No override path exists.
+
+Pass the call's context to `verify()` so the input-side steps have something to check:
+
+```python
+result = gate.verify(
+    "send_money",
+    tool_output,
+    input_params={"to": "Alice", "amount": 50},
+    identity_id="svc", identity_token=token,   # Step 1b, if a checker is configured
+    action="write_api", target="/accounts/1",  # Step 3
+)
+```
+
+> [!IMPORTANT]
+> **Steps 1b, 1c and 2 did nothing before 1.4.0.** `identity_checker` and
+> `input_sanitizer` were accepted by the constructor, stored, and never called;
+> `SchemaValidator.validate_input` was never invoked from anywhere in the
+> package. Input types, enums, `alpha_only`, lengths and unknown-parameter
+> rejection were therefore unenforced — which is how a string `"1000000"`
+> passed a frozen numeric ceiling of `100`, since `ValueConstraintChecker`
+> skips non-numeric values and nothing else inspected the type.
+>
+> If an `identity_checker` is configured and `verify()` is called without an
+> `identity_id`, the call is **declined** rather than silently unauthenticated.
 
 ### Phase 3: Enforcement (Default Deny)
 
@@ -260,13 +286,11 @@ from sovereign_mcp import ConsensusVerifier, OutputGate
 
 # Multiple DIFFERENT models (same model = tautology, blocked by design)
 verifier = ConsensusVerifier(
-    providers=[
-        gemini_provider,   # Google Gemini 2.0
-        openai_provider,   # OpenAI GPT-4o
-        ollama_provider,   # Local Llama 3
-    ]
+    model_a=gemini_provider,             # Google Gemini 2.0
+    model_b=openai_provider,             # OpenAI GPT-4o
+    consensus_models=[ollama_provider],  # Local Llama 3 (any number)
 )
-# Both must use temperature=0 (frozen, cannot be raised at runtime)
+# Every model must use temperature=0 (validated at construction)
 
 gate = OutputGate(frozen_registry, consensus_verifier=verifier)
 result = gate.verify("get_customer", tool_output)
@@ -292,8 +316,14 @@ data_a = {"Customer_Name": "  John  ", "Age": 34, "City": "BRUSSELS"}
 data_b = {"age": 34, "city": "Brussels", "customer_name": "John"}
 data_c = {"customer_name": "John", "age": 34, "city": "brussels"}
 
-match, hashes = hashes_match([data_a, data_b, data_c])
+# hashes_match compares exactly two structures and returns
+# (match, hash_a, hash_b):
+match, hash_a, hash_b = hashes_match(data_a, data_b)
 # match = True - semantically identical after normalization
+
+# For a panel of N, compare canonical hashes directly:
+hashes = [canonical_hash(d) for d in (data_a, data_b, data_c)]
+all_agree = len(set(hashes)) == 1        # True
 ```
 
 **Why this is deterministic:**
@@ -388,10 +418,20 @@ Independent source verification (solves the poisoned well):
 registry.register_tool(
     name="get_stock_price",
     # ...
-    verification_source="https://api.alternative-exchange.com/v1/price",
-    # Verification models will query this independent source instead of the tool output
+    # A CALLABLE is what actually delivers this countermeasure: it is invoked
+    # to retrieve the independent data the verifier models read.
+    verification_source=lambda: fetch_price_from_alternative_exchange(),
 )
 ```
+
+> [!IMPORTANT]
+> **Pass a callable, not a bare URL.** `sovereign-mcp` performs no network I/O
+> of its own. If `verification_source` is a plain string it is handed to the
+> provider verbatim, so unless that provider fetches it, the verifier models
+> receive *the URL itself* as their content rather than independent data - and
+> a poisoned source is not detected. The callable form is fetched before the
+> models run, and if it raises, the verification fails closed rather than
+> quietly falling back to the tool's own output.
 
 The verification source is frozen per tool at registration and **cannot be changed at runtime**.
 
@@ -428,7 +468,22 @@ The threshold is frozen in FrozenNamespace. The agent **cannot raise its own app
 
 ## Hash-Chained Audit Log
 
-Every verification decision, every incident, and every tool call is logged with a hash chain for tamper detection. Each entry includes the SHA-256 hash of the previous entry. Tampering with any entry breaks the chain.
+Every verification decision, every incident, and every tool call is logged with a hash chain for tamper detection. Each entry includes the SHA-256 hash of the previous entry, so editing or removing an entry breaks the chain.
+
+`verify_chain()` re-reads the log **from disk** by default (`from_disk=True`), because the threat is someone editing the file — verifying the in-memory copy could never detect that. Opening an `AuditLog` on an existing file resumes the chain rather than restarting from the genesis hash, so continuity survives a restart.
+
+Detected: an edited entry, a deleted entry, a corrupted line, and a truncated tail.
+
+> [!NOTE]
+> **Truncation needs the anchor, and the anchor is not a complete defence.**
+> A hash chain alone cannot detect entries being lopped off the end — what
+> remains is a shorter chain that is still internally consistent. Each append
+> therefore also records the chain length and head hash to a sidecar
+> `<log>.head` file, which `verify_chain()` compares against.
+>
+> An attacker with write access to **both** files can still truncate the log
+> and rewrite the anchor to match. Keep the anchor on separate storage, or ship
+> entries to an append-only sink, if truncation must be genuinely infeasible.
 
 ```python
 from sovereign_mcp import AuditLog

@@ -1,9 +1,13 @@
 """
 ConsensusCache — Cached Consensus Results for Performance.
 ==========================================================
-Caches consensus verification results for identical inputs to avoid
-redundant dual-model calls. Cache key is SHA-256 of (tool_name +
-normalized input parameters). TTL is configurable per tool.
+Caches consensus verification results for identical calls to avoid redundant
+multi-model calls. Cache key is SHA-256 of (tool_name + normalized input
+parameters + normalized tool OUTPUT). TTL is configurable per tool.
+
+The output belongs in the key: Layer C verifies the tool's response, so keying
+on the request alone let a tool return clean data once and poisoned data
+afterwards while reusing the clean verdict.
 
 Part of Phase 9: Performance Optimization (Strategy A).
 
@@ -63,12 +67,12 @@ class ConsensusCache:
         cache = ConsensusCache(default_ttl=300)
 
         # Check cache before running consensus
-        cached = cache.get("get_weather", {"city": "Brussels"})
+        cached = cache.get("get_weather", {"city": "Brussels"}, output)
         if cached:
             # Use cached result
         else:
             # Run full consensus, then cache
-            cache.put("get_weather", {"city": "Brussels"}, result)
+            cache.put("get_weather", {"city": "Brussels"}, output, result)
     """
 
     def __init__(self, default_ttl=300, max_entries=10000):
@@ -84,17 +88,34 @@ class ConsensusCache:
         self._hits = 0
         self._misses = 0
 
-    def _make_key(self, tool_name, input_params):
-        """Generate cache key from tool name + normalized input."""
+    def _make_key(self, tool_name, input_params, tool_output):
+        """Generate cache key from tool name + normalized input + OUTPUT.
+
+        The output is part of the key, and must be. Layer C verifies the tool's
+        RESPONSE, not its request. Keying on tool name and inputs alone meant a
+        tool that returned different data for the same inputs reused the
+        earlier "consensus matched" verdict and skipped Layer C entirely for
+        the whole TTL window - which is exactly the compromised-tool scenario
+        Layer C exists to catch.
+
+        Including the output keeps the optimisation that matters (a genuinely
+        identical response does not need re-verifying) while making any change
+        in the response a cache miss.
+        """
+        payload = {
+            "tool": tool_name,
+            "params": self._sort_recursive(input_params),
+            "output": self._sort_recursive(tool_output),
+        }
         try:
             canonical = json.dumps(
-                {"tool": tool_name, "params": self._sort_recursive(input_params)},
+                payload,
                 sort_keys=True, separators=(",", ":"),
                 default=str,  # M-21: prevent crash on non-serializable params
             )
         except (TypeError, ValueError):
             # Fallback: use repr for completely non-serializable inputs
-            canonical = repr({"tool": tool_name, "params": input_params})
+            canonical = repr(payload)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -106,18 +127,19 @@ class ConsensusCache:
             return [ConsensusCache._sort_recursive(item) for item in obj]
         return obj
 
-    def get(self, tool_name, input_params):
+    def get(self, tool_name, input_params, tool_output):
         """
         Look up a cached consensus result.
 
         Args:
             tool_name: Tool name.
             input_params: Input parameters dict.
+            tool_output: The tool's response. Part of the key - see _make_key.
 
         Returns:
             ConsensusCacheEntry or None if not cached/expired.
         """
-        key = self._make_key(tool_name, input_params)
+        key = self._make_key(tool_name, input_params, tool_output)
 
         with self._lock:
             entry = self._cache.get(key)
@@ -140,17 +162,18 @@ class ConsensusCache:
             )
             return entry
 
-    def put(self, tool_name, input_params, consensus_result, ttl=None):
+    def put(self, tool_name, input_params, tool_output, consensus_result, ttl=None):
         """
         Cache a consensus result.
 
         Args:
             tool_name: Tool name.
             input_params: Input parameters dict.
+            tool_output: The tool's response. Part of the key - see _make_key.
             consensus_result: ConsensusResult from the verifier.
             ttl: Time-to-live in seconds (overrides default).
         """
-        key = self._make_key(tool_name, input_params)
+        key = self._make_key(tool_name, input_params, tool_output)
         entry_ttl = ttl if ttl is not None else self._default_ttl
 
         with self._lock:

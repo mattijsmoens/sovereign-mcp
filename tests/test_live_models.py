@@ -8,8 +8,12 @@ not mocks. This verifies that:
   3. The full pipeline (schema → deception → consensus) works end-to-end
   4. Network errors are handled gracefully
 
+Opt-in. These make real network calls, so they are skipped unless
+RUN_LIVE_MODEL_TESTS=1 is set; a normal `pytest tests/` run stays hermetic.
+
 Requires:
-  - Gemini API key (from Karios .env)
+  - RUN_LIVE_MODEL_TESTS=1
+  - GEMINI_API_KEY in the environment
   - Ollama running locally on port 11434
 """
 
@@ -31,17 +35,22 @@ from sovereign_mcp.canonical_json import canonical_hash, canonical_dumps
 # Load API key
 # ===================================================================
 
+# These tests make real network calls to third-party APIs. They are opt-in:
+# without RUN_LIVE_MODEL_TESTS=1 they skip, so a normal `pytest tests/` run is
+# hermetic and cannot fail because an external endpoint moved or a key expired.
+RUN_LIVE = os.environ.get("RUN_LIVE_MODEL_TESTS") == "1"
+
+# Credentials come from the environment only. This previously fell back to
+# reading GEMINI_API_KEY out of a *different* project's .env file via a
+# hardcoded relative path (../../../Karios/.env), which scavenged a credential
+# from outside the repository and made the suite's behaviour depend on what
+# else happened to be checked out next to it.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-if not GEMINI_API_KEY:
-    _env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "Karios", ".env")
-    _env_path = os.path.normpath(_env_path)
-    if os.path.exists(_env_path):
-        with open(_env_path, 'r') as f:
-            for line in f:
-                if line.startswith("GEMINI_API_KEY="):
-                    GEMINI_API_KEY = line.strip().split("=", 1)[1]
-                    break
+# Which local model to exercise. The suite used to hardcode "llama3.2:latest",
+# which fails confusingly on any machine that has Ollama running but has not
+# pulled that specific model. Override with OLLAMA_TEST_MODEL.
+OLLAMA_TEST_MODEL = os.environ.get("OLLAMA_TEST_MODEL", "llama3.2:latest")
 
 
 # ===================================================================
@@ -118,7 +127,8 @@ class OllamaProvider(ModelProvider):
     Zero dependencies — uses only urllib.
     """
 
-    def __init__(self, model_id="qwen3.5:9b", host="http://localhost:11434"):
+    def __init__(self, model_id=None, host="http://localhost:11434"):
+        model_id = model_id or OLLAMA_TEST_MODEL
         super().__init__(model_id, temperature=0)
         self.host = host
 
@@ -174,14 +184,27 @@ class OllamaProvider(ModelProvider):
 # ===================================================================
 
 def ollama_available():
+    """True only if Ollama is running AND the requested model is pulled."""
+    if not RUN_LIVE:
+        return False
     try:
-        r = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
-        return True
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3) as r:
+            tags = json.loads(r.read().decode("utf-8"))
     except Exception:
         return False
+    names = {m.get("name") for m in tags.get("models", [])}
+    if OLLAMA_TEST_MODEL not in names:
+        print(
+            f"[live tests] Ollama is running but '{OLLAMA_TEST_MODEL}' is not "
+            f"pulled. Available: {sorted(n for n in names if n)}. "
+            f"Set OLLAMA_TEST_MODEL to one of them, or run "
+            f"`ollama pull {OLLAMA_TEST_MODEL}`."
+        )
+        return False
+    return True
 
 def gemini_available():
-    return GEMINI_API_KEY is not None
+    return RUN_LIVE and GEMINI_API_KEY is not None
 
 
 # ===================================================================
@@ -222,7 +245,7 @@ class TestOllamaProviderLive(unittest.TestCase):
     @unittest.skipUnless(ollama_available(), "Ollama not running")
     def test_ollama_extracts_structured_json(self):
         """Ask Ollama to extract structured data from plain text."""
-        provider = OllamaProvider(model_id="llama3.2:latest")
+        provider = OllamaProvider(model_id=OLLAMA_TEST_MODEL)
 
         content = (
             "The stock price of ACME Corp closed at $142.50 today, "
@@ -259,7 +282,7 @@ class TestLiveConsensus(unittest.TestCase):
         Check if their canonical hashes match.
         """
         gemini = GeminiProvider(model_id="gemini-2.0-flash")
-        ollama = OllamaProvider(model_id="llama3.2:latest")
+        ollama = OllamaProvider(model_id=OLLAMA_TEST_MODEL)
 
         verifier = ConsensusVerifier(model_a=gemini, model_b=ollama)
 
@@ -308,7 +331,7 @@ class TestLiveConsensus(unittest.TestCase):
         The system should handle this correctly (DECLINE).
         """
         gemini = GeminiProvider(model_id="gemini-2.0-flash")
-        ollama = OllamaProvider(model_id="llama3.2:latest")
+        ollama = OllamaProvider(model_id=OLLAMA_TEST_MODEL)
 
         verifier = ConsensusVerifier(model_a=gemini, model_b=ollama)
 
@@ -346,7 +369,7 @@ class TestLiveConsensus(unittest.TestCase):
         from sovereign_mcp import ToolRegistry, OutputGate
 
         gemini = GeminiProvider(model_id="gemini-2.0-flash")
-        ollama = OllamaProvider(model_id="llama3.2:latest")
+        ollama = OllamaProvider(model_id=OLLAMA_TEST_MODEL)
         consensus = ConsensusVerifier(model_a=gemini, model_b=ollama)
 
         reg = ToolRegistry()

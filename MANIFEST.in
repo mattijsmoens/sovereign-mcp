@@ -14,7 +14,6 @@ exclude del
 exclude regen_lock.py
 exclude adversarial_benchmark.py
 exclude test_live_e2e.py
-exclude setup.py
 
 # Exclude directories
 prune data

@@ -255,11 +255,66 @@ class ToolUpdater:
                 f"Allowed targets REDUCED: {sorted(removed_targets)}"
             )
 
+        # --- Check value constraints (Countermeasure 1) ---
+        # Countermeasure 1 exists so that "the agent cannot raise its own limit
+        # at runtime". Without this check the blue-green update path was
+        # exactly that escape hatch: raising a ceiling from 100 to 1e9, or
+        # dropping the constraints entirely, was auto-approved.
+        v1_vc = v1_definition.get("value_constraints") or {}
+        v2_vc = v2_definition.get("value_constraints") or {}
+
+        for field, limits in v1_vc.items():
+            if field not in v2_vc:
+                analysis.changes.append(
+                    f"Value constraints REMOVED for '{field}'"
+                )
+                analysis.requires_manual_approval = True
+                continue
+            new_limits = v2_vc[field] or {}
+            old_limits = limits or {}
+
+            old_max, new_max = old_limits.get("max"), new_limits.get("max")
+            if old_max is not None and (new_max is None or new_max > old_max):
+                analysis.changes.append(
+                    f"Value ceiling RAISED for '{field}': {old_max} -> {new_max}"
+                )
+                analysis.requires_manual_approval = True
+
+            old_min, new_min = old_limits.get("min"), new_limits.get("min")
+            if old_min is not None and (new_min is None or new_min < old_min):
+                analysis.changes.append(
+                    f"Value floor LOWERED for '{field}': {old_min} -> {new_min}"
+                )
+                analysis.requires_manual_approval = True
+
+        for field in set(v2_vc) - set(v1_vc):
+            analysis.changes.append(f"Value constraints ADDED for '{field}'")
+
         # --- Check description ---
         v1_desc = v1_definition.get("description", "")
         v2_desc = v2_definition.get("description", "")
         if v1_desc != v2_desc:
             analysis.changes.append("Description updated")
+            # Tool description poisoning is vulnerability #2 in this project's
+            # own threat list: the model reads descriptions during discovery
+            # and treats them as instructions. Freezing them at startup does
+            # not help if the sanctioned update path re-freezes a poisoned one
+            # without looking at it.
+            try:
+                from sovereign_mcp.deception_detector import DeceptionDetector
+                clean, detections = DeceptionDetector.scan(v2_desc)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    f"[ToolUpdater] Could not scan description, requiring "
+                    f"manual approval: {e}"
+                )
+                clean, detections = False, []
+            if not clean:
+                categories = sorted({d.get("category", "?") for d in detections})
+                analysis.changes.append(
+                    f"Description contains injection patterns: {categories}"
+                )
+                analysis.requires_manual_approval = True
 
         # --- Auto-approve determination ---
         # Schema-compatible updates with only removals → auto-approve (Line 729-730)

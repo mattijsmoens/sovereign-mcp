@@ -15,6 +15,7 @@ Zero cloud dependencies. Works entirely offline.
 Patent: Sovereign Shield Patent 20 (MCP Security Architecture)
 """
 
+import json
 import os
 import time
 import uuid

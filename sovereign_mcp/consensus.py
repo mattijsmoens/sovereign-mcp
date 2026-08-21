@@ -13,10 +13,10 @@ Consensus Integrity Requirements (from architecture doc):
     3. Schema Tightness: Frozen schema must be as specific as possible
 """
 
+import hmac
 import json
 import time
 import logging
-import requests
 from sovereign_mcp.canonical_json import canonical_hash, hashes_match, canonical_dumps
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,10 @@ class OpenRouterMCPProvider(ModelProvider):
         self.enforce_grammar = enforce_grammar
 
     def extract_structured(self, content, schema, system_prompt=None):
+        # Imported lazily so the core package stays stdlib-only. Only the
+        # HTTP-backed providers need `requests`.
+        import requests
+
         url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -149,6 +153,9 @@ class LocalMCPProvider(ModelProvider):
         self.enforce_grammar = enforce_grammar
 
     def extract_structured(self, content, schema, system_prompt=None):
+        # Imported lazily so the core package stays stdlib-only.
+        import requests
+
         url = f"{self.base_url}/chat/completions"
         headers = {"Content-Type": "application/json"}
         
@@ -247,9 +254,21 @@ class ConsensusVerifier:
         Args:
             tool_output: Raw output from the MCP tool.
             frozen_schema: Frozen output schema from registry.
-            verification_source: Optional independent data source for Model B
-                                 (Countermeasure 2: independent source verification).
-                                 If None, Model B uses the same tool_output.
+            verification_source: Optional independent data source for the
+                verifier models (Countermeasure 2). If None, every model reads
+                the same tool_output. Accepts either:
+
+                  * a CALLABLE - invoked with no arguments; its return value is
+                    the independent data the verifier models read. This is the
+                    form that actually delivers the countermeasure, because the
+                    verifiers see data retrieved separately from the tool.
+
+                  * any other value (typically a URL string) - passed to the
+                    provider verbatim. NOTE: nothing here fetches it. The
+                    provider is then responsible for retrieval, and if it does
+                    not perform any, the verifier models receive the URL itself
+                    as their content rather than independent data - which does
+                    not defeat a poisoned source. Prefer the callable form.
 
         Returns:
             ConsensusResult with match status, hashes, timing, and model outputs.
@@ -257,9 +276,25 @@ class ConsensusVerifier:
         import concurrent.futures
         start_time = time.time()
 
+        resolved_source = verification_source
+        if callable(verification_source):
+            try:
+                resolved_source = verification_source()
+            except Exception as e:
+                # Fail closed: an independent source that cannot be reached is
+                # not grounds to silently fall back to the tool's own output,
+                # which is exactly the data being cross-checked.
+                elapsed = (time.time() - start_time) * 1000
+                return ConsensusResult(
+                    match=False,
+                    reason=f"Verification source unavailable: {e}",
+                    latency_ms=elapsed,
+                    used_independent_source=True,
+                )
+
         inputs = [tool_output]
         for _ in range(1, len(self.models)):
-            inputs.append(verification_source if verification_source is not None else tool_output)
+            inputs.append(resolved_source if resolved_source is not None else tool_output)
 
         def fetch(idx, model, inp):
             try:
@@ -294,7 +329,10 @@ class ConsensusVerifier:
 
         # Deterministic comparison: canonical hash match
         base_hash = hashes[0]
-        match = all(h == base_hash for h in hashes[1:])
+        # Constant-time comparison to prevent timing attacks.
+        # all() with a generator would short-circuit, so evaluate every
+        # comparison before reducing.
+        match = all([hmac.compare_digest(base_hash, h) for h in hashes[1:]])
         elapsed = (time.time() - start_time) * 1000
 
         if match:

@@ -278,6 +278,13 @@ def verify_integrity(strict=True):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    # Windows consoles default to cp1252 and cannot encode the status glyphs
+    # below, which would turn a successful run into a UnicodeEncodeError.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
     if len(sys.argv) > 1 and sys.argv[1] == "--generate":
         print("Generating integrity lockfile...")
         data = generate_lockfile()

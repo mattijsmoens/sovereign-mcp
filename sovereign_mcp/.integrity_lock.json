@@ -1,22 +1,22 @@
 {
-  "aggregate_hash": "52c6a867b4c1a448ad13e26ed0c1dc1ec738838751c0f5fb16fb9c129836a15a",
-  "file_count": 36,
+  "aggregate_hash": "5672d92fd997073bf63fb03a4c9495d82cbfb4e576c4fb3ab8183212d315a421",
+  "file_count": 35,
   "files": {
     "__init__.py": {
-      "sha256": "6344027bd09c0d96ba42a71a824f7b8b3099b48c49c13c9be1bb36cb3ed38996",
+      "sha256": "773c9b12fa4ad613e8c65ccf9c04284746cee230a1e2ab0b973ba7c957de6281",
       "size": 5155
     },
     "adaptive_shield.py": {
-      "sha256": "61eb710c83c81f479c517cb007f235071ae803dfdb9a10a6568a93f9aa33806f",
-      "size": 25224
+      "sha256": "11de4f496bc2927aac28e2c663ddbb1438f4d1bd8fc6f1b1cde02c50686f12e6",
+      "size": 25237
     },
     "anti_patterns.py": {
       "sha256": "1a2a9aab2eeacf89b9eb9498162560b75a2d6357ee6769a54932e014acfbcdb8",
       "size": 3457
     },
     "audit_log.py": {
-      "sha256": "94cb098038d1e0c9bd1fe1f7bee027b53d20cd7ac0b6f0e29871a39885eb0227",
-      "size": 7691
+      "sha256": "d8ba9de48a3fd543b1ddcef29ebd030ebe59be9b5f285fe6257f4beebb96a060",
+      "size": 13597
     },
     "canonical_json.py": {
       "sha256": "722d150983287d0cad0c761e1123803fcf3d9d81e8925ae7bb97e37838fccecc",
@@ -27,20 +27,20 @@
       "size": 10219
     },
     "consensus.py": {
-      "sha256": "62e8d25a0e128a870cae8878878427c3b8150d822ef3d9bda93fb112752d46f2",
-      "size": 14317
+      "sha256": "dfc29f4b462f1dc7febc42a1f3b09b3f1f80f4cd15c10f503fac2f157ef42f7c",
+      "size": 16211
     },
     "consensus_cache.py": {
-      "sha256": "8955c4d3d239f22f0f5e559a5c2d70b6fd482a5aee5ea41847a624c83c2e696f",
-      "size": 8596
+      "sha256": "a293c524de676eb4c491586c7ffce106e2b2c915dd78a57bd1ebe58ab5bd215c",
+      "size": 9775
     },
     "content_safety.py": {
       "sha256": "8ee9dc72e27cae924f7f888198fa6cffc85eb34ef08b85ddffc66ed0d98f1e4a",
       "size": 6459
     },
     "deception_detector.py": {
-      "sha256": "2ddd4b6bf3500f027356367a387de0248ae6dfbae3b0ee88ea7abb48c2b24399",
-      "size": 7052
+      "sha256": "8cf0dcc60574b8797773b0ecc3241845565ba6f893e684d65a84666b10674d78",
+      "size": 7985
     },
     "domain_checker.py": {
       "sha256": "f2c1daae74f3ef4ae1a8b71e772d2d2d4af768cb69f0a7d75e283bf3a16487d9",
@@ -49,10 +49,6 @@
     "frozen_memory.c": {
       "sha256": "c47b2d37276e7150934fb8f185329d85c7a7dc22a0150e67c65437ba0e3194d4",
       "size": 13285
-    },
-    "frozen_memory.cp312-win_amd64.pyd": {
-      "sha256": "d7a0c04b7931bed8bd33f83dde1dfdc11dabdd2bdcb41e86acef183fcb6f9769",
-      "size": 15360
     },
     "frozen_memory_fallback.py": {
       "sha256": "7863a120f50e11fd00e53363256a8a8c254ac30a7f1ed5807e3821447694768e",
@@ -83,16 +79,16 @@
       "size": 24042
     },
     "input_sanitizer.py": {
-      "sha256": "b162bd12b17afb8415915a6153f47ad120f80894313bbf087057896d4cd16c94",
-      "size": 8061
+      "sha256": "ec494e345f4be649b2232264b3403e471c702271127330654d5d80952cc66aed",
+      "size": 8448
     },
     "integrity_lock.py": {
-      "sha256": "f634f43c3f48bb6b83fa5c98e4f60a64c0f9182929eedd059c0bf1775083444a",
-      "size": 10973
+      "sha256": "dba339fec8c06f0e7636f9716009fcfbce7ec3147848123aaa9e7462a6a81518",
+      "size": 11255
     },
     "output_gate.py": {
-      "sha256": "6aff00b5f3d5a94ca0f2d810f249e77817d8b10b0cdad7eff44c6dfee7d4a7af",
-      "size": 21441
+      "sha256": "8bd08e21b0fa65c7997d6d75a5d51d47e0a78263bae27aac254471e29e6cf518",
+      "size": 26585
     },
     "permission_checker.py": {
       "sha256": "ac97f82f392108005be5414796a6bfe09fd30462e948a9cfec66c5d2a39b82e9",
@@ -107,8 +103,8 @@
       "size": 4223
     },
     "sandbox_registry.py": {
-      "sha256": "cb76a2ccdebd0ea1373582e7e8c51a1caf0c37d1cd6d5d6eddfe5512d71ed473",
-      "size": 11913
+      "sha256": "87894c249e0353098d19a504152cbdbb8fcc1beca7086d561c5c09149a10c8b3",
+      "size": 13431
     },
     "schema_validator.py": {
       "sha256": "fff10aaa54d1732b081a716ba607b325f01f0adf722842cc814edc58fc86b941",
@@ -131,8 +127,8 @@
       "size": 10201
     },
     "tool_updater.py": {
-      "sha256": "e3fdad88bb58b8b31ce5959565c5df83d40a37a346ae601fefcf726d484e392a",
-      "size": 18294
+      "sha256": "cb17955fedc63edfe6bbf784d7040fb01b180c025589d6dd6ba691772c586347",
+      "size": 21065
     },
     "transport_security.py": {
       "sha256": "49058c4dc8cf6b9364c71643e772ad5e76f4d576f33494d1c6c1d6db294a9b5d",

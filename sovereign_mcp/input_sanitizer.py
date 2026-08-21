@@ -30,7 +30,12 @@ _SQL_KEYWORDS = re.compile(
 )
 _SQL_COMMENTS = re.compile(r"(--|/\*|\*/)")  # M-08: Semicolons handled separately
 _SQL_INJECTION_SEMI = re.compile(r"(?i)(?:['\"]\s*;|;\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|EXEC))")  # Only SQLi semicolons
-_HTML_TAGS = re.compile(r"<[^>]*>")
+# Requires a tag-like name (or a closing slash) immediately after "<".
+# The previous pattern was r"<[^>]*>", which treats ANY "<...>" span as a tag
+# and silently deleted the middle of ordinary text: "5 < 10 and 10 > 5" became
+# "5  5". Comparisons, inequalities and ranges are common in tool parameters,
+# and corrupting them is worse than the markup it was trying to strip.
+_HTML_TAGS = re.compile(r"</?[a-zA-Z][^>]*>")
 _SCRIPT_TAGS = re.compile(r"(?i)<\s*script[^>]*>.*?<\s*/\s*script\s*>", re.DOTALL)
 _EVENT_HANDLERS = re.compile(
     r"(?i)\s*on(?:click|load|error|mouseover|mouseout|mousedown|mouseup|keydown|keyup"

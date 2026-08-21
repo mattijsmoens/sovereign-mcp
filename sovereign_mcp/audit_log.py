@@ -44,6 +44,41 @@ class AuditLog:
 
         if log_file:
             os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+            # Resume the existing chain. Without this, a restarted process
+            # began again from the genesis hash, so every entry written after
+            # a restart claimed previous_hash = 000...0 and silently broke
+            # chain continuity - and verify_chain() on a fresh AuditLog had no
+            # entries to check, so it reported an untouched (True, None) over
+            # a log it had never read.
+            self._load_existing()
+
+    def _load_existing(self):
+        """Read an existing log file so the chain continues across restarts."""
+        if not os.path.exists(self._log_file):
+            return
+        try:
+            with open(self._log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "[AuditLog] Skipping unparseable line while loading "
+                            "existing log; verify_chain() will report the break."
+                        )
+                        continue
+                    self._entries.append(entry)
+            if self._entries:
+                self._last_hash = self._entries[-1].get("entry_hash", self._last_hash)
+                logger.info(
+                    f"[AuditLog] Resumed existing chain: {len(self._entries)} "
+                    f"entries, head {self._last_hash[:16]}..."
+                )
+        except Exception as e:
+            logger.error(f"[AuditLog] Could not load existing log: {e}")
 
     def log_incident(self, tool_name, layer, severity, reason,
                      tool_output=None, input_params=None):
@@ -149,25 +184,39 @@ class AuditLog:
                             pass  # Best-effort locking
                         f.write(full_entry_json + "\n")
                         f.flush()
+                    self._write_head_anchor(len(self._entries), entry["entry_hash"])
                 except Exception as e:
                     # M-06: Rollback in-memory state on write failure
                     self._entries.pop()
                     self._last_hash = entry["previous_hash"]
                     logger.error(f"[AuditLog] Failed to persist entry (in-memory rolled back): {e}")
 
-    def verify_chain(self):
+    def verify_chain(self, from_disk=True):
         """
         Verify the integrity of the entire hash chain.
+
+        Args:
+            from_disk: When a log file is configured, re-read it and verify
+                what is actually stored rather than the in-memory copy. This
+                is the default because the threat being defended against is
+                someone editing the file; verifying memory could never detect
+                that. Pass False to check only the in-memory entries.
 
         Returns:
             tuple: (is_valid: bool, broken_at: int or None)
         """
-        if not self._entries:
+        entries = self._entries
+        if from_disk and self._log_file:
+            entries = self._read_entries_from_disk()
+            if entries is None:
+                return False, 0
+
+        if not entries:
             return True, None
 
         expected_prev = "0" * 64  # Genesis hash
 
-        for i, entry in enumerate(self._entries):
+        for i, entry in enumerate(entries):
             # Check previous hash link (constant-time comparison)
             if not hmac.compare_digest(entry.get("previous_hash", ""), expected_prev):
                 return False, i
@@ -183,7 +232,88 @@ class AuditLog:
 
             expected_prev = stored_hash
 
+        # Chain links are intact; check nothing was lopped off the end.
+        if from_disk and self._log_file:
+            truncation = self._check_head_anchor(entries)
+            if truncation:
+                logger.error(f"[AuditLog] Chain anchor mismatch: {truncation}")
+                return False, len(entries)
+
         return True, None
+
+    @property
+    def _head_file(self):
+        return self._log_file + ".head" if self._log_file else None
+
+    def _write_head_anchor(self, count, head_hash):
+        """
+        Record how long the chain is and what its head is.
+
+        A hash chain alone cannot detect TRUNCATION: deleting entries from the
+        end leaves a shorter chain that is still internally consistent, so
+        verify_chain() reports it as intact. The anchor gives verification an
+        expected length and head to compare against.
+
+        This is not a complete defence. An attacker with write access to both
+        files can truncate the log and rewrite the anchor to match. Keeping the
+        anchor on separate storage, or shipping entries to an append-only sink,
+        is what makes truncation genuinely infeasible.
+        """
+        try:
+            with open(self._head_file, "w", encoding="utf-8") as f:
+                json.dump({"count": count, "head_hash": head_hash}, f)
+        except Exception as e:
+            logger.warning(f"[AuditLog] Could not update head anchor: {e}")
+
+    def _check_head_anchor(self, entries):
+        """Compare entries against the recorded head. Returns reason or None."""
+        head_file = self._head_file
+        if not head_file or not os.path.exists(head_file):
+            return None
+        try:
+            with open(head_file, "r", encoding="utf-8") as f:
+                anchor = json.load(f)
+        except Exception as e:
+            return f"head anchor unreadable: {e}"
+
+        expected_count = anchor.get("count")
+        expected_head = anchor.get("head_hash")
+        if expected_count is not None and len(entries) != expected_count:
+            return (
+                f"chain length {len(entries)} does not match the recorded "
+                f"length {expected_count} - entries were added or removed"
+            )
+        if entries and expected_head:
+            actual_head = entries[-1].get("entry_hash", "")
+            if not hmac.compare_digest(actual_head, expected_head):
+                return "chain head does not match the recorded head"
+        return None
+
+    def _read_entries_from_disk(self):
+        """Read the persisted chain. Returns None if the file is unreadable."""
+        if not os.path.exists(self._log_file):
+            # Nothing persisted yet is not a break.
+            return []
+        entries = []
+        try:
+            with open(self._log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        # A corrupted line is itself evidence of tampering.
+                        logger.error(
+                            "[AuditLog] Unparseable entry in log file - "
+                            "treating the chain as broken."
+                        )
+                        return None
+        except Exception as e:
+            logger.error(f"[AuditLog] Could not read log file for verification: {e}")
+            return None
+        return entries
 
     def get_incidents(self, severity=None, tool_name=None, limit=100):
         """
