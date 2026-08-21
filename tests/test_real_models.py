@@ -11,7 +11,23 @@ import sys
 import os
 import json
 import time
-import requests
+
+# `requests` is NOT a dependency of this package - the HTTP providers import it
+# lazily so the core stays stdlib-only. Importing it at module scope here made
+# the whole test module fail to collect in any environment without it, which is
+# every clean CI run. These are live Ollama tests anyway, so they are opt-in.
+RUN_LIVE = os.environ.get("RUN_LIVE_MODEL_TESTS") == "1"
+try:
+    import requests
+except ImportError:  # pragma: no cover - environment-dependent
+    requests = None
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not RUN_LIVE or requests is None,
+    reason="live Ollama tests: set RUN_LIVE_MODEL_TESTS=1 and install requests",
+)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.stdout.reconfigure(line_buffering=True)
