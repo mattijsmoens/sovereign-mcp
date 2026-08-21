@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }} ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install test deps
+        run: python -m pip install --upgrade pip pytest
+
+      # The package refuses to import if any source file disagrees with
+      # .integrity_lock.json. A clone previously failed this because git
+      # normalised line endings while the lockfile hashes raw bytes, so
+      # `git clone && import sovereign_mcp` raised IntegrityViolation on
+      # files nobody had touched. Checking on three operating systems is
+      # what makes that class of bug impossible to miss again.
+      - name: Source integrity (as a fresh clone sees it)
+        run: python -m sovereign_mcp.integrity_lock --verify
+        env:
+          SOVEREIGN_MCP_SKIP_INTEGRITY: "1"
+
+      - name: Import from a clean checkout
+        run: python -c "import sovereign_mcp; print(sovereign_mcp.__version__)"
+
+      - name: Tests
+        run: python -m pytest tests/ -q
+
+  distribution:
+    name: distribution is installable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --upgrade pip build twine
+
+      - name: Build
+        run: python -m build
+        env:
+          SOVEREIGN_MCP_SKIP_EXT: "1"
+          SOVEREIGN_MCP_SKIP_INTEGRITY: "1"
+
+      # Two-directional lockfile check. Verifying only that shipped files
+      # match the lockfile misses the opposite failure - a lockfile entry for
+      # a file the wheel does NOT ship, which import reports as FILE DELETED.
+      # 1.3.1 and 1.3.2 were published in exactly that state and could not be
+      # imported at all.
+      - name: Verify wheel is self-consistent
+        run: python verify_dist.py dist/*.whl
+
+      - name: Validate PyPI metadata
+        run: python -m twine check dist/*
+
+      # The real install path, in a fresh environment, with no local source
+      # on sys.path. This is what actually catches a broken release.
+      - name: Install the wheel and use it
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/python -m pip install --quiet dist/*.whl
+          cd /tmp
+          /tmp/fresh/bin/python -c "
+          import sovereign_mcp
+          from sovereign_mcp import ToolRegistry, OutputGate
+          r = ToolRegistry()
+          r.register_tool(name='t', description='d',
+                          input_schema={'a': {'type': 'string', 'required': True}},
+                          output_schema={'b': {'type': 'number'}},
+                          capabilities=['read_api'], risk_level='LOW')
+          g = OutputGate(r.freeze())
+          assert g.verify('t', {'b': 1}, input_params={'a': 'x'}).accepted
+          assert not g.verify('t', {'b': 1}, input_params={'a': 'x', 'evil': 1}).accepted
+          print('wheel OK', sovereign_mcp.__version__)
+          "
+
+      - name: Confirm requests is not a hidden runtime dependency
+        run: |
+          python -m venv /tmp/norequests
+          /tmp/norequests/bin/python -m pip install --quiet dist/*.whl
+          cd /tmp
+          /tmp/norequests/bin/python -c "
+          import sys, sovereign_mcp
+          assert 'requests' not in sys.modules, 'requests imported at package import time'
+          print('core import is stdlib-only')
+          "
