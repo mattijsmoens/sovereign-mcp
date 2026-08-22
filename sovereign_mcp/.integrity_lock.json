@@ -1,6 +1,6 @@
 {
   "aggregate_hash": "e3c0544c0a3d975909ac0280ac868288c119e7116103b40ae55772e5bb7367c9",
-  "file_count": 38,
+  "file_count": 39,
   "files": {
     "__init__.py": {
       "sha256": "474e5899ba48afa1cb765c0b2f251b204d4cf40e00869733dd99220f14b2a92a",
@@ -53,6 +53,10 @@
     "frozen_memory.c": {
       "sha256": "c47b2d37276e7150934fb8f185329d85c7a7dc22a0150e67c65437ba0e3194d4",
       "size": 13285
+    },
+    "frozen_memory.cp312-win_amd64.pyd": {
+      "sha256": "14e55f233ca7c382aa1b3f25d8cc9eac2ecee9c4821c7be4010c85ee3183099a",
+      "size": 15360
     },
     "frozen_memory_fallback.py": {
       "sha256": "7863a120f50e11fd00e53363256a8a8c254ac30a7f1ed5807e3821447694768e",

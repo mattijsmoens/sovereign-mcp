@@ -44,6 +44,10 @@ sidecar = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 # here would force an unusable combination on anyone installing both. The
 # adapter supports both lines; 1.29 and 2.0 are the versions tested.
 mcp = ["mcp>=1.29"]
+# The gating proxy lives in its own package, sovereign-mcp-gateway. It is a
+# composition layer over all four packages, so it depends on this library
+# rather than the other way round - an extra here would have made the library
+# optionally depend on three of its own peers.
 
 [project.scripts]
 sovereign-mcp-sidecar = "sovereign_mcp.sidecar:main"

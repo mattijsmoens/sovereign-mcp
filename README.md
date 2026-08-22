@@ -88,6 +88,19 @@ Three defects were invisible until then, and none would have shown up against a 
 2. **`mcp-server-git` declares no `outputSchema`** — optional under the spec, and common — which the frozen registry rejected outright.
 3. **`mcp-server-sqlite`'s `list_tables` takes no parameters**, so its input schema is empty; that was rejected too, and once allowed, a truthiness guard silently skipped input validation for exactly those tools.
 
+## Protecting servers you didn't write
+
+A library has to be adopted by whoever wrote the server. To protect servers you cannot modify — which is most of them, since the useful MCP servers are published packages — use the gateway:
+
+```bash
+pip install "sovereign-mcp-gateway[all]"
+sovereign-mcp-gateway --config gateway.json
+```
+
+It proxies any number of upstream MCP servers, merges their catalogues, and runs every call through policy, this package's verification chain, and a hash-chained audit trail before it reaches the server that would execute it.
+
+It lives in its own repository — [sovereign-mcp-gateway](https://github.com/mattijsmoens/sovereign-mcp-gateway) — because it is a composition layer over four packages and depends on this one, not the other way round.
+
 ## Auditing a server you don't control
 
 The package ships an audit tool. Point it at any MCP server, over the same stdio transport a real client uses:
