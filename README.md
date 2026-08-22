@@ -10,6 +10,163 @@
 
 ---
 
+## What this is
+
+Your MCP server exposes tools to an AI agent. Nothing in the protocol stops a caller from invoking a tool you never registered, passing arguments that violate your own schema, or hiding instructions inside an argument the model will later read back as if you had written them.
+
+SovereignShield freezes your tool definitions at startup and checks every call against that frozen reference — deterministically, and **before the tool runs**.
+
+No model in the request path, no API key, no network call. The same input always produces the same verdict.
+
+## Install
+
+```bash
+pip install "sovereign-mcp[mcp]"
+```
+
+Works with the official MCP Python SDK, **1.x and 2.x** — tested against 1.29 and 2.0 on every release.
+
+Both lines matter. The published servers (`mcp-server-git`, `-fetch`, `-sqlite`, `-time`) require SDK **1.x** and break on 2.0 — `mcp-server-git` calls `server.list_resources()`, which 2.0 removed. That is why the `[mcp]` extra is not pinned to 2.x: pinning it would force an unusable combination on anyone installing this alongside a published server.
+
+## Protect a server you already have
+
+One line, whichever SDK API built it — including servers you did not write:
+
+```python
+from sovereign_mcp.integrations import protect
+
+protect(server)
+```
+
+`protect()` wraps the registered `tools/call` handler, which the low-level `Server`, 1.x `FastMCP` and 2.x `MCPServer` all share. Your tools are frozen on the first call — by which point every registration has run — and every call after that is verified against those frozen definitions.
+
+## Or create a new protected server
+
+```python
+from sovereign_mcp.integrations import sovereign_server
+
+mcp = sovereign_server("file-tools")     # FastMCP on 1.x, MCPServer on 2.x
+
+@mcp.tool()
+def read_file(path: str) -> str:
+    """Read a text file."""
+    return open(path).read()
+
+mcp.run(transport="stdio")
+```
+
+## Proof: four real, published servers
+
+Not a toy tool that returns a string. [`tests/test_published_servers.py`](tests/test_published_servers.py) protects four packages someone else wrote and released, then attacks each one. The only thing added to any of them is `protect(server)`.
+
+| Package | Tools | Legitimate calls | Attacks |
+| --- | --- | --- | --- |
+| `mcp-server-git` | 12 | `git_status`, `git_diff_unstaged`, `git_log` — all allowed | 4 blocked |
+| `mcp-server-sqlite` | 6 | `create_table`, `write_query`, `read_query`, `list_tables` — all allowed | 4 blocked |
+| `mcp-server-fetch` | 1 | `fetch` reaches the tool | 5 blocked |
+| `mcp-server-time` | 2 | `get_current_time`, `convert_time` — allowed | 4 blocked |
+
+Every attack is refused at an input-side layer, so **nothing reaches a tool body**, and the tests verify that against real state rather than against the gate's own report:
+
+- **git** — after an injected `git_commit`, the repository still holds exactly one commit: the original. The injected commit was never created.
+- **sqlite** — after a blocked `DELETE FROM notes`, the row is still there. The database is opened directly to check.
+
+The four attacks each server refuses: a tool that was never registered (`pre_check`), an argument of the wrong type (`input_schema`), a parameter not in the frozen schema (`input_schema`), and a prompt injection carried in an argument (`input_deception`).
+
+```bash
+pip install "sovereign-mcp[mcp]" mcp-server-git mcp-server-time mcp-server-fetch mcp-server-sqlite
+python -m pytest tests/test_published_servers.py -v
+```
+
+[`examples/protect_third_party.py`](examples/protect_third_party.py) runs the git case as a readable script; [`examples/protected_server.py`](examples/protected_server.py) needs nothing but the SDK.
+
+### What testing against real servers changed
+
+Three defects were invisible until then, and none would have shown up against a tool written to demonstrate the library:
+
+1. **Every published server pins SDK 1.x**, whose handler registry and handler signature both differ from 2.x. An adapter built only on the 2.x extension API protects almost nothing in the wild.
+2. **`mcp-server-git` declares no `outputSchema`** — optional under the spec, and common — which the frozen registry rejected outright.
+3. **`mcp-server-sqlite`'s `list_tables` takes no parameters**, so its input schema is empty; that was rejected too, and once allowed, a truthiness guard silently skipped input validation for exactly those tools.
+
+## Auditing a server you don't control
+
+The package ships an audit tool. Point it at any MCP server, over the same stdio transport a real client uses:
+
+```bash
+sovereign-mcp-audit -- mcp-server-sqlite --db-path /tmp/scratch.db
+```
+
+It connects as a client, enumerates the tools, classifies each by blast radius, then fires a corpus of malformed and hostile inputs at every field and reports what was **accepted**. Exit code is non-zero when anything was, so it can gate a pipeline.
+
+Run against four published servers:
+
+| Server | Tools | Probes | Accepted | Skipped (writes) |
+| --- | --- | --- | --- | --- |
+| `mcp-server-time` | 2 | 52 | 0 | 0 |
+| `mcp-server-fetch` | 1 | 22 | 0 | 0 |
+| `mcp-server-git` | 12 | 82 | 0 | 9 |
+| `mcp-server-sqlite` | 6 | 15 | **10** | 4 |
+
+Three validate their inputs. The fourth accepts SQL metacharacters, shell metacharacters, NUL bytes, traversal sequences and 10,000-character strings in `describe_table.table_name` — which its source interpolates straight into a query with an f-string.
+
+### Two rules that keep it safe to run
+
+**State-changing tools are not probed by default.** Anything that looks like a write is inventoried and skipped, because a server that does not validate would simply perform the operation with the probe's argument. `--include-writes` opts in, and belongs only on a disposable instance.
+
+**No payload asks a tool to destroy anything.** The corpus is malformed structure and inert text. There is no `DROP TABLE` and no `rm -rf` in it — a test asserts that, so it stays true.
+
+### What a clean run does and does not mean
+
+It means the server rejected a standard corpus. It does not mean the server is secure. The tool reads no source code, so it cannot see the defect class that matters most — a check that is present, is called, and silently does nothing. Every report says so in its own footer.
+
+That is the division of labour: the tool makes the first day mechanical, so the remaining days go to reading implementations and proving each control can actually fail.
+
+## What runs on every call
+
+Before your tool executes:
+
+| Check | Declines when |
+| --- | --- |
+| Registration | The tool is not in the frozen registry |
+| Integrity | A frozen definition's hash no longer matches |
+| Input schema | An argument is missing, unknown, or the wrong type |
+| Injection | An argument carries a prompt-injection payload |
+| Value constraints | A numeric argument exceeds its frozen ceiling |
+| Permissions | The caller may not touch that target |
+
+After it returns, on the result: output schema (Layer A), AI anti-patterns, deception detection (Layer B), PII, content safety, and — when you configure model providers — N-model structured consensus (Layer C) and the behavioural floor (Layer D).
+
+Everything except Layer C is deterministic and local. Layer C is opt-in and the only part that talks to a model.
+
+A tool that declares no `outputSchema` — which the MCP spec permits, and most real tools do — has no output contract to check, so Layer A is recorded as **skipped** rather than passed. A missing schema is not a passing schema.
+
+## Tuning
+
+**PII in output.** Through these adapters `pii_policy` defaults to `"warn"`: detections are logged, not blocked. Real tools return personal data as their normal output — every `git log` entry carries an author email — and blocking those makes the gate unusable. Pass `pii_policy="block"` when your tools should never emit PII:
+
+```python
+protect(server, pii_policy="block")
+```
+
+`OutputGate` itself still defaults to `"block"`; the difference is deliberate and lives in the adapter, because an adapter wraps tools it did not write.
+
+**Everything else.** To add consensus, an audit log, identity checks or rate limits, build the gate yourself and hand it over:
+
+```python
+from sovereign_mcp import OutputGate, AuditLog
+from sovereign_mcp.integrations import protect
+
+gate = OutputGate(frozen_registry, consensus_verifier=..., audit_log=AuditLog("audit.jsonl"))
+protect(server, gate=gate)
+```
+
+Not on the official SDK at all? The [sidecar proxy](#sidecar-proxy-language-agnostic-integration) exposes the same chain over REST for servers in any language.
+
+The rest of this document explains the architecture: what is frozen, why freezing is irreversible, and how each layer works.
+
+
+---
+
 ## The Problem
 
 MCP (Model Context Protocol) has become the standard for connecting AI agents to tools. But the protocol has fundamental security gaps that no amount of patching will fix without an architectural solution.
@@ -52,7 +209,11 @@ This is **deterministic verification**. Same input compared against same immutab
 
 ---
 
-## Quick Start
+## Quick Start (building the chain by hand)
+
+Most servers should use the one-line integration above. This is the manual
+path - useful when you are not on the official SDK, or when you want to
+assemble the registry and gate yourself.
 
 ```python
 from sovereign_mcp import ToolRegistry, OutputGate, SchemaValidator

@@ -1,9 +1,9 @@
 {
-  "aggregate_hash": "adb2196c30930fb8bbb13204f29c3ea1fd2bfde124ca4189c9ccaacbb816ee75",
-  "file_count": 35,
+  "aggregate_hash": "e3c0544c0a3d975909ac0280ac868288c119e7116103b40ae55772e5bb7367c9",
+  "file_count": 38,
   "files": {
     "__init__.py": {
-      "sha256": "773c9b12fa4ad613e8c65ccf9c04284746cee230a1e2ab0b973ba7c957de6281",
+      "sha256": "474e5899ba48afa1cb765c0b2f251b204d4cf40e00869733dd99220f14b2a92a",
       "size": 5155
     },
     "adaptive_shield.py": {
@@ -13,6 +13,10 @@
     "anti_patterns.py": {
       "sha256": "1a2a9aab2eeacf89b9eb9498162560b75a2d6357ee6769a54932e014acfbcdb8",
       "size": 3457
+    },
+    "audit.py": {
+      "sha256": "31ab69ea5aafffc4ca8e9e30807a58b06e722d7d1f65a71a2469a14d916effcf",
+      "size": 22200
     },
     "audit_log.py": {
       "sha256": "d8ba9de48a3fd543b1ddcef29ebd030ebe59be9b5f285fe6257f4beebb96a060",
@@ -55,8 +59,8 @@
       "size": 10602
     },
     "frozen_namespace.py": {
-      "sha256": "1fcc4443c389580574dafba757bf77307cb93341ec71927fb3d73b8fa18820df",
-      "size": 7935
+      "sha256": "a76f3e1feadb98f605bf67748d35e966a1bbe5639c8b2e0951755a7d66bb400c",
+      "size": 8617
     },
     "hardware_protection.py": {
       "sha256": "bec0f8d780983373ea35dabf0bae240074cbc897f6eafac722bfb2bcef7bc682",
@@ -82,13 +86,21 @@
       "sha256": "ec494e345f4be649b2232264b3403e471c702271127330654d5d80952cc66aed",
       "size": 8448
     },
+    "integrations/__init__.py": {
+      "sha256": "6a28b62c963c89b6b250379c6e60645d5c3e3d0f3e92c05168d98ef22b163bf2",
+      "size": 792
+    },
+    "integrations/mcp_sdk.py": {
+      "sha256": "c2c92751fff337a0d9379515a323745285b89e5dfde0983cb5092271406932e0",
+      "size": 24411
+    },
     "integrity_lock.py": {
-      "sha256": "dba339fec8c06f0e7636f9716009fcfbce7ec3147848123aaa9e7462a6a81518",
-      "size": 11255
+      "sha256": "dc569c271b2b4635b3c000fb910e077d5b3104f1e3a75a7a5ee90de1dafbb920",
+      "size": 13508
     },
     "output_gate.py": {
-      "sha256": "8bd08e21b0fa65c7997d6d75a5d51d47e0a78263bae27aac254471e29e6cf518",
-      "size": 26585
+      "sha256": "6317a81fb6c4ce8fcc45c3dd84fefa0fc40cdafecd3270448897cf2f7e1d858f",
+      "size": 31570
     },
     "permission_checker.py": {
       "sha256": "ac97f82f392108005be5414796a6bfe09fd30462e948a9cfec66c5d2a39b82e9",

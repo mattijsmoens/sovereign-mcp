@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sovereign-mcp"
-version = "1.4.0"
+version = "1.5.0"
 description = "Deterministic MCP Security Architecture. FrozenNamespace as Root of Trust for Model Context Protocol tool verification."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -37,9 +37,17 @@ classifiers = [
 
 [project.optional-dependencies]
 sidecar = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
+# Protect a server built on the official MCP SDK:
+#   pip install "sovereign-mcp[mcp]"
+# Deliberately not pinned to 2.x. The published MCP servers (mcp-server-git,
+# -fetch, -sqlite, -time) require 1.x and break on 2.0, so pinning >=2.0.0
+# here would force an unusable combination on anyone installing both. The
+# adapter supports both lines; 1.29 and 2.0 are the versions tested.
+mcp = ["mcp>=1.29"]
 
 [project.scripts]
 sovereign-mcp-sidecar = "sovereign_mcp.sidecar:main"
+sovereign-mcp-audit = "sovereign_mcp.audit:main"
 
 [project.urls]
 Homepage = "https://github.com/mattijsmoens/sovereign-mcp"

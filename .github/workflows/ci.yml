@@ -42,6 +42,69 @@ jobs:
       - name: Tests
         run: python -m pytest tests/ -q
 
+  mcp-integration:
+    name: MCP SDK ${{ matrix.sdk }} integration
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.x is what the published servers pin; 2.x is the current line.
+        # The adapter must work on both, and they differ in the high-level
+        # class, the extension API, the handler signature and schema casing.
+        sdk: ["1", "2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip pytest
+      - name: Install the pinned SDK line
+        run: |
+          python -m pip install "mcp>=${{ matrix.sdk }},<$((${{ matrix.sdk }}+1))"
+          python -m pip install -e .
+          python -c "import importlib.metadata as m; print('mcp', m.version('mcp'))"
+      - name: Integration tests
+        run: python -m pytest tests/test_mcp_sdk_integration.py -q
+      - name: The documented example still does what the README claims
+        run: |
+          python examples/protected_server.py > out.txt
+          cat out.txt
+          grep -q "verdict ALLOWED" out.txt
+          grep -q "pre_check" out.txt
+          grep -q "input_schema" out.txt
+          grep -q "input_deception" out.txt
+          # Exactly one tool body ran: the legitimate call, and nothing else.
+          test "$(grep -c "^   ('" out.txt)" = "1"
+
+  third-party-servers:
+    name: protects published third-party servers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip pytest
+      - name: Install four published MCP servers
+        run: |
+          # These pin their own `mcp` version - deliberately not overridden,
+          # so CI sees whatever the ecosystem actually resolves to.
+          python -m pip install mcp-server-git mcp-server-time                                 mcp-server-fetch mcp-server-sqlite
+          python -m pip install -e .
+          python -c "import importlib.metadata as m; print('mcp', m.version('mcp'))"
+      - name: Every server keeps working and refuses every attack
+        run: python -m pytest tests/test_published_servers.py -v -p no:randomly
+      - name: The git example, end to end
+        run: |
+          # No pipe: the script's own exit code must reach the runner. It
+          # returns non-zero if the injected commit ever lands.
+          python examples/protect_third_party.py > out.txt
+          cat out.txt
+          grep -q "git_log              ALLOWED" out.txt
+          grep -q "git_push_force       BLOCKED" out.txt
+          grep -q "git_commit           BLOCKED" out.txt
+          grep -q "was not modified" out.txt
+
   distribution:
     name: distribution is installable
     runs-on: ubuntu-latest

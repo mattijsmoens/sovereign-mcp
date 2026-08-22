@@ -53,20 +53,58 @@ def _hash_file(filepath):
     return h.hexdigest()
 
 
-def _get_source_files():
-    """
-    Get all .py source files in the package directory (non-recursive).
-    Returns sorted list of (filename, absolute_path) tuples.
-    Excludes the lockfile itself and __pycache__.
+#: Compiled accelerators are OPTIONAL by design - the package ships
+#: `frozen_memory_fallback.py` and runs on ctypes when no extension is built.
+#: So their presence or absence is a supported configuration, not tampering:
+#:
+#:   * absent but in the lockfile  -> fine (a clean checkout, or a pure-Python
+#:     install; this is what a fresh `git clone` looks like)
+#:   * present but not in the lockfile -> fine (built locally after sealing)
+#:   * present AND in the lockfile -> the hash must match, or it is tampering
+#:
+#: They are also excluded from the aggregate hash, which would otherwise differ
+#: between a machine that compiled the extension and one that did not. Treating
+#: an optional artifact as mandatory is what made the 1.3.1 and 1.3.2 wheels
+#: unimportable, and it broke a fresh clone of this repository too.
+_OPTIONAL_BINARY_SUFFIXES = (".pyd", ".so")
+
+
+def _is_optional_binary(filename):
+    return filename.endswith(_OPTIONAL_BINARY_SUFFIXES)
+
+
+def _walk_package(suffixes):
+    """Yield (relative_name, absolute_path) for package files, recursively.
+
+    Recursive since 1.5.0. It was a flat listdir while the package was flat,
+    but that silently left every subpackage outside the seal - including
+    `integrations/`, which is the gate itself for MCP SDK users. A whole-package
+    integrity check that skips a subpackage is not a whole-package check.
+
+    Names are POSIX-relative to the package root so a lockfile generated on
+    Windows verifies on Linux.
     """
     files = []
-    for entry in sorted(os.listdir(_PACKAGE_DIR)):
-        if not entry.endswith(".py"):
-            continue
-        filepath = os.path.join(_PACKAGE_DIR, entry)
-        if os.path.isfile(filepath):
-            files.append((entry, filepath))
-    return files
+    for dirpath, dirnames, filenames in os.walk(_PACKAGE_DIR):
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for entry in sorted(filenames):
+            if not entry.endswith(suffixes):
+                continue
+            filepath = os.path.join(dirpath, entry)
+            if not os.path.isfile(filepath):
+                continue
+            rel = os.path.relpath(filepath, _PACKAGE_DIR).replace(os.sep, "/")
+            files.append((rel, filepath))
+    return sorted(files)
+
+
+def _get_source_files():
+    """
+    Get all .py source files in the package, recursively.
+    Returns sorted list of (relative_name, absolute_path) tuples.
+    Excludes the lockfile itself and __pycache__.
+    """
+    return _walk_package((".py",))
 
 
 def _get_all_source_files():
@@ -76,13 +114,7 @@ def _get_all_source_files():
     L-14: Also includes .pyd (Windows) and .so (Unix) compiled extensions
     to detect supply-chain tampering of compiled binaries.
     """
-    files = []
-    for entry in sorted(os.listdir(_PACKAGE_DIR)):
-        if entry.endswith((".py", ".c", ".pyd", ".so")):
-            filepath = os.path.join(_PACKAGE_DIR, entry)
-            if os.path.isfile(filepath):
-                files.append((entry, filepath))
-    return files
+    return _walk_package((".py", ".c", ".pyd", ".so"))
 
 
 def generate_lockfile():
@@ -113,9 +145,14 @@ def generate_lockfile():
             "size": os.path.getsize(filepath),
         }
 
-    # Compute aggregate hash over all individual hashes (sorted by filename)
+    # Compute aggregate hash over all individual hashes (sorted by filename).
+    # Optional compiled accelerators are excluded so the aggregate is identical
+    # on a machine that built the extension and one that did not; they are
+    # still sealed individually and checked whenever they are present.
     aggregate_parts = []
     for filename in sorted(lock_data["files"].keys()):
+        if _is_optional_binary(filename):
+            continue
         aggregate_parts.append(f"{filename}:{lock_data['files'][filename]['sha256']}")
     aggregate_str = "|".join(aggregate_parts)
     lock_data["aggregate_hash"] = hashlib.sha256(
@@ -182,15 +219,22 @@ def verify_integrity(strict=True):
     current_filenames = {name for name, _ in current_files}
     locked_filenames = set(locked_files.keys())
 
-    # Check for deleted files (files in lockfile but not on disk)
+    # Check for deleted files (files in lockfile but not on disk).
+    # An absent optional accelerator is a supported configuration, not a
+    # deletion - see _OPTIONAL_BINARY_SUFFIXES.
     for missing in sorted(locked_filenames - current_filenames):
+        if _is_optional_binary(missing):
+            continue
         violations.append(
             f"FILE DELETED: '{missing}' exists in lockfile but not on disk. "
             f"Expected hash: {locked_files[missing]['sha256'][:16]}..."
         )
 
-    # Check for added files (files on disk but not in lockfile)
+    # Check for added files (files on disk but not in lockfile).
+    # A locally compiled accelerator is likewise expected.
     for added in sorted(current_filenames - locked_filenames):
+        if _is_optional_binary(added):
+            continue
         violations.append(
             f"FILE ADDED: '{added}' exists on disk but not in lockfile. "
             f"Unauthorized addition detected."
@@ -224,6 +268,8 @@ def verify_integrity(strict=True):
     if not violations:
         aggregate_parts = []
         for filename in sorted(locked_files.keys()):
+            if _is_optional_binary(filename):
+                continue          # excluded at generation time too
             if filename in computed_hashes:
                 aggregate_parts.append(f"{filename}:{computed_hashes[filename]}")
         aggregate_str = "|".join(aggregate_parts)

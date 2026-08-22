@@ -45,9 +45,17 @@ class OutputGate:
                  identity_checker=None, domain_checker=None,
                  input_sanitizer=None, incident_responder=None,
                  social_engineering_detector=None,
-                 scan_output_for_anti_patterns=False):
+                 scan_output_for_anti_patterns=False,
+                 pii_policy="block"):
         """
         Args:
+            pii_policy: What to do when PII is found in a tool's output.
+                "block" (default) declines the call. "warn" logs and allows -
+                appropriate when tools legitimately return personal data, as
+                `git log` does with author emails, or a CRM lookup does by
+                definition. "off" skips the check entirely. Blocking is the
+                safe default, but it is a policy choice, not a security
+                invariant: an email in a git log is the tool working.
             frozen_registry: FrozenRegistry from ToolRegistry.freeze().
             consensus_verifier: ConsensusVerifier instance (optional, Layer C).
             value_checker: ValueConstraintChecker instance (optional, CM 1).
@@ -80,30 +88,21 @@ class OutputGate:
         self._incident_responder = incident_responder
         self._social_engineering_detector = social_engineering_detector
         self._scan_output_for_anti_patterns = scan_output_for_anti_patterns
+        if pii_policy not in ("block", "warn", "off"):
+            raise ValueError(
+                f"pii_policy must be 'block', 'warn' or 'off'. Got: {pii_policy}")
+        self._pii_policy = pii_policy
 
-    def verify(self, tool_name, tool_output, input_params=None,
-               identity_id=None, identity_token=None,
-               action=None, target=None):
+    def _verify_input_side(self, tool_name, input_params, identity_id,
+                           identity_token, action, target, start, layers_passed):
+        """Run every check that can be made BEFORE the tool executes.
+
+        Registration, quarantine, rate limit, integrity, identity,
+        sanitization, input schema, permissions and value constraints.
+
+        Returns a declining GateResult, or None if the call may proceed.
+        Appends to `layers_passed` in place so the caller sees progress.
         """
-        Run the full verification chain over a tool call and its output.
-
-        Args:
-            tool_name: Name of the MCP tool that produced the output.
-            tool_output: Dict of output data from tool execution.
-            input_params: Dict of input parameters. Validated against the frozen
-                INPUT schema and, when configured, sanitized and value-checked.
-            identity_id: Caller identity. Required when an identity_checker is
-                configured — the call is declined without it.
-            identity_token: Caller's authentication token.
-            action / target: The action being performed and the resource it
-                touches, for PermissionChecker. Checked when both are supplied.
-
-        Returns:
-            GateResult with accepted/declined status, which layer triggered,
-            timing, and reason.
-        """
-        start = time.time()
-        layers_passed = []
 
         # Pre-check: is the tool registered?
         if not self._registry.is_registered(tool_name):
@@ -208,6 +207,25 @@ class OutputGate:
                 )
             layers_passed.append("SANITIZE")
 
+        # --- Check 13: Injection in Input Parameters ---
+        # Layer B scans tool OUTPUT. Before this check existed, an injection
+        # carried in a tool's arguments was caught only when the tool happened
+        # to echo it back into its result; a tool that consumed the argument
+        # silently left it undetected - and either way the tool had already
+        # run. Scanning here stops the call before execution.
+        if input_params is not None:
+            in_clean, in_detections = DeceptionDetector.scan_dict(input_params)
+            if not in_clean:
+                summary = ", ".join(
+                    f"{d['category']}:'{d['match']}'" for d in in_detections[:3]
+                )
+                return _decline(
+                    "input_deception",
+                    f"Injection detected in input parameters: {summary}",
+                    "HIGH",
+                )
+            layers_passed.append("input_deception")
+
         # --- Step 2: Input Schema Validation ---
         # SchemaValidator.validate_input existed, was exported, and was
         # documented as step 2 of the chain - but was never called from
@@ -215,7 +233,12 @@ class OutputGate:
         # unknown-parameter rejection were all unenforced, which is how a
         # string "1000" slipped past a numeric ceiling: ValueConstraintChecker
         # skips non-numeric values, and nothing else looked at the type.
-        if input_params is not None and tool.INPUT_SCHEMA:
+        # No `and tool.INPUT_SCHEMA` guard here. An empty frozen input schema
+        # means "this tool takes no parameters", and validate_input then
+        # rejects every supplied parameter as unknown - which is the whole
+        # point. Skipping validation for empty schemas would let a zero-
+        # argument tool accept anything at all.
+        if input_params is not None:
             in_ok, in_reason = SchemaValidator.validate_input(
                 input_params, tool.INPUT_SCHEMA
             )
@@ -249,8 +272,74 @@ class OutputGate:
                 self._log_incident(tool_name, result, "HIGH")
                 return result
 
+        return None
+
+    def verify_call(self, tool_name, input_params=None, identity_id=None,
+                    identity_token=None, action=None, target=None):
+        """Verify a tool call BEFORE executing it.
+
+        Runs the input-side half of the chain. Use this to decide whether a
+        tool may run at all; pair it with verify() on the result afterwards.
+        Output-side layers (A, anti-patterns, B, PII, content safety, C, D)
+        need output and are not run here.
+
+        Returns:
+            GateResult. accepted=True means "safe to execute", not
+            "output verified" — the tool has not run yet.
+        """
+        start = time.time()
+        layers_passed = []
+        declined = self._verify_input_side(tool_name, input_params, identity_id,
+                                           identity_token, action, target,
+                                           start, layers_passed)
+        if declined is not None:
+            return declined
+        return GateResult(
+            accepted=True,
+            layer="input_checks",
+            reason="Input-side checks passed; tool has not executed yet.",
+            latency_ms=(time.time() - start) * 1000,
+            layers_passed=layers_passed,
+        )
+
+    def verify(self, tool_name, tool_output, input_params=None,
+               identity_id=None, identity_token=None,
+               action=None, target=None):
+        """
+        Run the full verification chain over a tool call and its output.
+
+        Args:
+            tool_name: Name of the MCP tool that produced the output.
+            tool_output: Dict of output data from tool execution.
+            input_params: Dict of input parameters. Validated against the frozen
+                INPUT schema and, when configured, sanitized and value-checked.
+            identity_id: Caller identity. Required when an identity_checker is
+                configured — the call is declined without it.
+            identity_token: Caller's authentication token.
+            action / target: The action being performed and the resource it
+                touches, for PermissionChecker. Checked when both are supplied.
+
+        Returns:
+            GateResult with accepted/declined status, which layer triggered,
+            timing, and reason.
+        """
+        start = time.time()
+        layers_passed = []
+        declined = self._verify_input_side(tool_name, input_params, identity_id,
+                                           identity_token, action, target,
+                                           start, layers_passed)
+        if declined is not None:
+            return declined
+        tool = self._registry.get_tool(tool_name)
+
         # --- Layer A: Schema Validation ---
-        if isinstance(tool_output, dict):
+        # A tool may legitimately declare no output schema (the MCP spec makes
+        # outputSchema optional). There is then no contract to check, so Layer
+        # A is recorded as SKIPPED rather than passed - the remaining output
+        # layers still run.
+        if not tool.OUTPUT_SCHEMA:
+            layers_passed.append("A_skipped_no_output_schema")
+        elif isinstance(tool_output, dict):
             valid_a, reason_a = SchemaValidator.validate_output(
                 tool_output, tool.OUTPUT_SCHEMA
             )
@@ -258,7 +347,7 @@ class OutputGate:
             valid_a = False
             reason_a = f"Tool output must be a dict, got {type(tool_output).__name__}"
 
-        if not valid_a:
+        if tool.OUTPUT_SCHEMA and not valid_a:
             elapsed = (time.time() - start) * 1000
             result = GateResult(
                 accepted=False,
@@ -269,7 +358,8 @@ class OutputGate:
             )
             self._log_incident(tool_name, result, "LOW")
             return result
-        layers_passed.append("A")
+        if tool.OUTPUT_SCHEMA:
+            layers_passed.append("A")
 
         # --- Layer Anti-Pattern: AI Failure Mode Interception ---
         # Scanned against the tool CALL, not the tool's response.
@@ -325,6 +415,16 @@ class OutputGate:
 
         # --- PII Detection (Check 4) ---
         pii_clean, pii_detections = PIIDetector.scan_dict(tool_output)
+        if not pii_clean and self._pii_policy == "warn":
+            logger.warning(
+                "PII in output of '%s' (allowed by pii_policy='warn'): %s",
+                tool_name,
+                ", ".join(f"{d['type']}({d['sensitivity']})"
+                          for d in pii_detections[:3]),
+            )
+            pii_clean = True
+        elif self._pii_policy == "off":
+            pii_clean = True
         if not pii_clean:
             elapsed = (time.time() - start) * 1000
             pii_summary = ", ".join(

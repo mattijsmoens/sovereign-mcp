@@ -125,10 +125,20 @@ def freeze_tool_definition(name, description, input_schema, output_schema,
     """
     if not name or not isinstance(name, str):
         raise ValueError("Tool name must be a non-empty string.")
-    if not input_schema or not isinstance(input_schema, dict):
-        raise ValueError("Input schema must be a non-empty dict.")
-    if not output_schema or not isinstance(output_schema, dict):
-        raise ValueError("Output schema must be a non-empty dict.")
+    if not isinstance(input_schema, dict):
+        raise ValueError("Input schema must be a dict.")
+    # An EMPTY input schema is permitted and means "this tool takes no
+    # parameters" - `list_tables()` in mcp-server-sqlite is exactly that, and
+    # zero-argument tools are common. It is the strict reading, not a loose
+    # one: SchemaValidator.validate_input rejects every supplied parameter as
+    # unknown, so a no-argument tool called with arguments is declined.
+    if not isinstance(output_schema, dict):
+        raise ValueError("Output schema must be a dict.")
+    # An EMPTY output schema is permitted and means "this tool declares no
+    # output contract" - the MCP spec makes outputSchema optional and most
+    # real servers omit it. Layer A is then skipped for that tool rather than
+    # reported as passed; see OutputGate. A missing schema is not a passing
+    # schema, and recording it as one would be false assurance.
     if risk_level not in ("LOW", "MEDIUM", "HIGH"):
         raise ValueError(f"Risk level must be LOW, MEDIUM, or HIGH. Got: {risk_level}")
 
