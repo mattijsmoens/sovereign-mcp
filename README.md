@@ -6,7 +6,7 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-orange.svg)](LICENSE)
-[![Patent Pending](https://img.shields.io/badge/patent-pending-brightgreen.svg)]()
+[![Patents Pending](https://img.shields.io/badge/patents-pending-brightgreen.svg)]()
 
 ---
 
@@ -816,7 +816,7 @@ Every component in the decision path:
 | `frozen_memory.c` | C extension - OS-level read-only memory pages. | ~418 |
 | `frozen_memory_fallback.py` | ctypes fallback - same OS protection without compilation. | ~327 |
 | `integrity_lock.py` | Supply-chain defense. SHA-256 lockfile for .py/.c/.pyd/.so files. | ~308 |
-| `input_filter.py` | 9-layer multi-decode anti-bypass input sanitization. Persona hijack, multilingual keywords (15 languages), co-occurrence detection. | ~530 |
+| `input_filter.py` | 9-layer multi-decode anti-bypass input sanitization. Persona hijack, multilingual keywords (21 languages), co-occurrence detection. | ~530 |
 | `adaptive_shield.py` | Self-learning security filter. Attack reporting, rule generation, sandbox testing, auto-deploy. | ~640 |
 | `truth_guard.py` | Hallucination detection. Tracks verification tool usage, blocks unverified factual claims. SQLite cache. | ~470 |
 | `conscience.py` | Ethical evaluation engine. Multi-factor harm assessment with configurable thresholds. | ~240 |
@@ -1017,7 +1017,7 @@ Freeze the tool definitions. Freeze the schemas. Freeze the permissions. Freeze 
 
 The semantic gap - the hardest problem in AI security - is closed through four deterministic layers: schema validation, deception detection, structured JSON consensus, and the FrozenNamespace behavioral floor. Even the model-assisted verification step uses deterministic hash comparison for its accept/reject decision.
 
-**One primitive. Ten vulnerabilities. Four defense layers. Three data poisoning countermeasures. Fully deterministic. Patent pending.**
+**One primitive. Ten vulnerabilities. Four defense layers. Three data poisoning countermeasures. Fully deterministic. Patents pending.**
 
 *Sovereign Shield - Deterministic AI Security*
 *Mattijs Moens, 2026*

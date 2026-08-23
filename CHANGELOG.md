@@ -2,6 +2,24 @@
 
 All notable changes to sovereign-mcp are documented here.
 
+## [1.5.1] — 2026-08-23
+
+### Fixed
+
+- **The multilingual keyword count was wrong in every place it was stated.** The
+  source comment said 15, the README said 22. Counting the language headers in
+  `MULTILINGUAL_BAD_SIGNALS` gives **21** — Spanish, French, German, Portuguese,
+  Chinese (Simplified), Japanese, Korean, Russian, Arabic, Hindi, Italian, Dutch,
+  Swedish, Norwegian, Finnish, Polish, Czech, Ukrainian, Turkish, Danish, Greek.
+
+### Changed
+
+- The patent badge now reads **Patents Pending** rather than the singular, and
+  matches the other packages.
+
+No code changes. Entries for 1.3.x through 1.5.0 were not recorded here at the
+time; see the GitHub Releases for those.
+
 ## [1.2.0] — 2026-03-21
 
 ### LLM Social Engineering Detection (Optional)
