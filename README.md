@@ -1017,7 +1017,7 @@ Freeze the tool definitions. Freeze the schemas. Freeze the permissions. Freeze 
 
 The semantic gap - the hardest problem in AI security - is closed through four deterministic layers: schema validation, deception detection, structured JSON consensus, and the FrozenNamespace behavioral floor. Even the model-assisted verification step uses deterministic hash comparison for its accept/reject decision.
 
-**One primitive. Ten vulnerabilities. Four defense layers. Three data poisoning countermeasures. Fully deterministic. Patents pending.**
+**One primitive. Ten vulnerabilities. Four defense layers. Three data poisoning countermeasures. Fully deterministic.**
 
 *Sovereign Shield - Deterministic AI Security*
 *Mattijs Moens, 2026*

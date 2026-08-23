@@ -39,6 +39,7 @@ the first day of an audit mechanical so the remaining days can be spent on the
 part a scanner cannot do.
 """
 
+import re
 import json
 import shlex
 import sys
@@ -204,24 +205,67 @@ class ToolProfile:
         return args
 
 
+#: Whole word plus its common inflections. Bare substring matching classified
+#: `directory_tree` as WRITE because "put" occurs inside "output", and would
+#: equally match set/asset, add/address, run/runtime, copy/copyright.
+_VERB_CACHE = {}
+
+
+def _find_verb(text, verbs):
+    """Return the first verb present in `text` as a whole word, else None."""
+    for verb in verbs:
+        pattern = _VERB_CACHE.get(verb)
+        if pattern is None:
+            pattern = re.compile(r"\b%s(?:s|es|ed|ing|d)?\b" % re.escape(verb))
+            _VERB_CACHE[verb] = pattern
+        if pattern.search(text):
+            return verb
+    return None
+
+
+def _first_sentence(text):
+    """The summary line. Later sentences often describe what a tool does NOT do.
+
+    `read_multiple_files` was classified WRITE because a later sentence reads
+    "Failed reads won't stop the entire operation".
+    """
+    text = " ".join((text or "").split())
+    for stop in (". ", "\n"):
+        if stop in text:
+            text = text.split(stop)[0]
+    return text
+
+
 def classify(name, description):
     """WRITE, READ or UNKNOWN, from the tool's own name and description.
 
-    A tool is called WRITE if either its name or its description carries a
-    state-changing verb. Ambiguity resolves to WRITE, because the penalty for
-    guessing wrong in that direction is only a skipped probe.
+    The name wins over the prose. A tool called `read_*` is a read whatever its
+    description happens to mention, and it is the name the author chose to
+    describe the operation.
+
+    Ambiguity resolves to WRITE, but only genuine ambiguity: a WRITE guess means
+    the tool is skipped, and a skipped probe in a scanner is a false negative,
+    which is the failure mode this tool exists to avoid.
     """
-    haystack = (name + " " + description).lower()
-    name_l = name.lower()
-    for verb in WRITE_VERBS:
-        if verb in name_l:
-            return "WRITE"
-    for verb in WRITE_VERBS:
-        if verb in haystack:
-            return "WRITE"
-    for verb in READ_VERBS:
-        if verb in name_l:
-            return "READ"
+    # Split the name into words first. A regex word boundary does not break
+    # on "_", because underscore is a word character, so a boundary-anchored
+    # "get" never matched inside "get_asset". camelCase is split too, for
+    # servers that use it.
+    name_l = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+    name_l = re.sub(r"[_\-]+", " ", name_l).lower()
+    summary = _first_sentence(description).lower()
+
+    # 1. The name is the strongest signal, in both directions.
+    if _find_verb(name_l, WRITE_VERBS):
+        return "WRITE"
+    if _find_verb(name_l, READ_VERBS):
+        return "READ"
+
+    # 2. Failing that, what the summary sentence says it does.
+    if _find_verb(summary, WRITE_VERBS):
+        return "WRITE"
+    if _find_verb(summary, READ_VERBS):
+        return "READ"
     return "UNKNOWN"
 
 
@@ -253,6 +297,12 @@ class AuditReport:
         self.findings = []
         self.skipped = []
         self.errors = []
+        #: probes the server accepted but which produced the same answer as a
+        #: benign call, so they had no observable effect. Counted, not alarmed
+        #: about: reporting these as findings is what made a correct server look
+        #: broken.
+        self.no_effect = []
+        self.notes = []
         self.calls = 0
 
     # -- summary --------------------------------------------------------
@@ -272,6 +322,10 @@ class AuditReport:
             "probes_sent": self.calls,
             "findings": [f.to_dict() for f in self.findings],
             "skipped_tools": self.skipped,
+            "accepted_without_effect": [
+                {"tool": t, "field": f, "probe": p} for t, f, p in self.no_effect
+            ],
+            "notes": self.notes,
             "errors": self.errors,
         }
 
@@ -301,14 +355,26 @@ class AuditReport:
                 add("  " + name)
             add("")
 
-        add("FINDINGS  (%d probes sent, %d accepted)" % (self.calls, len(self.findings)))
+        add("FINDINGS  (%d probes sent, %d with an observable effect)"
+            % (self.calls, len(self.findings)))
         add("-" * 78)
         if self.dry_run:
             add("  Dry run: no probes were sent. Nothing here has been tested.")
         elif not self.findings:
-            add("  Every malformed input was refused. This server validates its")
-            add("  inputs. Note what that does and does not mean - see the caveat")
-            add("  at the end of this report.")
+            if self.no_effect:
+                add("  Nothing reached anything. %d hostile input%s %s accepted by"
+                    % (len(self.no_effect),
+                       "" if len(self.no_effect) == 1 else "s",
+                       "was" if len(self.no_effect) == 1 else "were"))
+                add("  the schema but produced the same answer as an ordinary call,")
+                add("  which is what a field that legitimately takes free text does.")
+                add("  Everything else was refused outright.")
+            else:
+                add("  Every malformed input was refused. This server validates its")
+                add("  inputs.")
+            add("")
+            add("  Note what that does and does not mean - see the caveat at the")
+            add("  end of this report.")
         else:
             for level in ("HIGH", "MEDIUM", "LOW"):
                 group = self.by_severity(level)
@@ -326,6 +392,26 @@ class AuditReport:
             add("-" * 78)
             for err in self.errors[:10]:
                 add("  " + err[:150])
+            add("")
+
+        if self.no_effect:
+            add("ACCEPTED BUT WITH NO OBSERVABLE EFFECT  (%d)" % len(self.no_effect))
+            add("-" * 78)
+            add("  These were accepted by the schema, then produced the same result")
+            add("  as a benign call. A free-text field accepting free text is its")
+            add("  contract, not a defect, so they are counted rather than raised.")
+            seen = {}
+            for tool, field, probe in self.no_effect:
+                seen.setdefault("%s.%s" % (tool, field), []).append(probe)
+            for where in sorted(seen):
+                add("  %-34s %s" % (where, ", ".join(sorted(set(seen[where])))[:38]))
+            add("")
+
+        if self.notes:
+            add("NOTES")
+            add("-" * 78)
+            for n in self.notes:
+                add("  " + n)
             add("")
 
         add("=" * 78)
@@ -410,25 +496,66 @@ def _schema_of(tool):
 async def _probe_tool(session, tool, report, timeout):
     import anyio
 
-    async def send(args, field, probe):
+    async def call(args):
+        """Return (ok, text). ok is False when the server refused or failed."""
         report.calls += 1
         try:
             with anyio.fail_after(timeout):
                 result = await session.call_tool(tool.name, args)
         except TimeoutError:
-            report.errors.append("%s: timed out on probe %s" % (tool.name, probe.key))
-            return
+            return False, "__timeout__"
         except Exception as exc:                      # noqa: BLE001
-            # A raised exception is the server refusing, loudly. Not a finding.
-            report.errors.append("%s/%s: %s: %s" % (
-                tool.name, probe.key, type(exc).__name__, str(exc)[:120]))
+            return False, "%s: %s" % (type(exc).__name__, str(exc)[:120])
+        if _is_error(result):
+            return False, _text_of(result)
+        return True, _text_of(result)
+
+    # --- baseline -------------------------------------------------------
+    # Two benign calls, to find out whether this tool answers deterministically.
+    # One would be enough only if no tool ever returned a timestamp or a new id.
+    ok_a, base_a = await call(tool.benign_args())
+    ok_b, base_b = await call(tool.benign_args())
+    if not (ok_a and ok_b):
+        # Benign arguments were refused, so there is nothing to compare against.
+        # Fall back to the older rule: any accepted probe is worth reporting.
+        baseline, deterministic = None, False
+    else:
+        baseline = base_a
+        deterministic = (base_a == base_b)
+        if not deterministic:
+            report.notes.append(
+                "%s answers differently to two identical benign calls, so its "
+                "responses cannot be compared. Only reflected payloads are "
+                "reported for it." % tool.name)
+
+    async def send(args, field, probe):
+        ok, text = await call(args)
+        if not ok:
+            if text == "__timeout__":
+                report.errors.append("%s: timed out on probe %s" % (tool.name, probe.key))
+            else:
+                # A refusal is the server doing its job, loudly. Not a finding.
+                report.errors.append("%s/%s: %s" % (tool.name, probe.key, text))
             return
 
-        if _is_error(result):
-            return                                     # refused - good
+        value = probe.value if probe.value is not None else ""
+        reflected = bool(value) and str(value)[:60] in text
+
+        if baseline is not None:
+            if reflected:
+                pass                                   # the payload reached the output
+            elif not deterministic:
+                report.no_effect.append((tool.name, field, probe.key))
+                return
+            elif text == baseline:
+                # Same answer as a benign call: the payload changed nothing
+                # observable. A search box returning "no results" for a hostile
+                # query is a search box working correctly.
+                report.no_effect.append((tool.name, field, probe.key))
+                return
+
         report.findings.append(Finding(
-            tool.name, field, probe.key, probe.severity, probe.meaning,
-            _text_of(result)))
+            tool.name, field, probe.key, probe.severity, probe.meaning, text))
 
     # One field at a time, everything else structurally valid.
     for field in tool.fields:

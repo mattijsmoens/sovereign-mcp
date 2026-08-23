@@ -2,6 +2,50 @@
 
 All notable changes to sovereign-mcp are documented here.
 
+## [1.6.0] — 2026-08-23
+
+### Fixed
+
+- **`sovereign-mcp-audit` reported correct servers as vulnerable.** Any response
+  that was not an error counted as a finding; what came back was never examined.
+  Run against the published `server-memory`, that produced five HIGH findings on
+  `search_nodes.query`, a free-text search field, where every response was
+  `{"entities": [], "relations": []}`. The server searched for the hostile
+  string, found nothing, and said so.
+
+  Each probe is now compared against a benign baseline. A probe counts only if
+  the response differs from that baseline, or the payload appears in the output.
+  Two baseline calls are taken, so a tool that returns a timestamp or a fresh id
+  is detected as non-deterministic rather than making every probe look
+  significant.
+
+  Discounted probes are counted and listed under "accepted but with no
+  observable effect", so the number stays auditable instead of quietly
+  disappearing.
+
+  ```
+  server-memory      before: 5 HIGH, 11 findings   after: 0 findings
+  mcp-server-sqlite  before: 10 findings           after: 8, all real
+  ```
+
+- **Read-only tools were classified WRITE and silently skipped.** Blast-radius
+  matching was a bare substring test over the whole description, so
+  `directory_tree` was WRITE because "put" occurs inside "output", and
+  `read_multiple_files` was WRITE because a later sentence reads "Failed reads
+  won't stop the entire operation". The same flaw matched set/asset,
+  add/address, run/runtime, copy/copyright.
+
+  Matching is now whole-word with inflections, the tool's own name takes
+  precedence over its prose, and only the first sentence of the description is
+  considered. Names are split on `_`, `-` and camelCase first, because a regex
+  word boundary does not break on an underscore.
+
+  A skipped probe in a scanner is a false negative, which is the failure this
+  tool exists to find. The previous docstring argued the opposite.
+
+- 17 tests covering both, including the exact responses the published servers
+  return.
+
 ## [1.5.1] — 2026-08-23
 
 ### Fixed
