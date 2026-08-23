@@ -1,9 +1,9 @@
 {
-  "aggregate_hash": "49a87162759da72f35fba7697a70589117042b776bc06a00ab2bb62145f29714",
-  "file_count": 39,
+  "aggregate_hash": "6f4bd46e0aa716587d53ef55719bfaf5f62c10021c9bf1bc21bc84dd130d3cd2",
+  "file_count": 38,
   "files": {
     "__init__.py": {
-      "sha256": "48a19bf8ba53d963a01766a9ac445ae5b1b0a6d640ab13ae7cc71547b310f8d3",
+      "sha256": "62d5db16818add6f2ec72e2c606adc4ffce66f02903404fae228fe0385d6c075",
       "size": 5155
     },
     "adaptive_shield.py": {
@@ -15,8 +15,8 @@
       "size": 3457
     },
     "audit.py": {
-      "sha256": "aa3ea3f750993f1eec60e788d366bbd6a1c30e8294a574449cbe7ddb6ebfd2a3",
-      "size": 27776
+      "sha256": "f517acbe5c0d2a3aa3789e4e38d3555289dd359a354ed1c93f1e759774297c17",
+      "size": 952
     },
     "audit_log.py": {
       "sha256": "d8ba9de48a3fd543b1ddcef29ebd030ebe59be9b5f285fe6257f4beebb96a060",
@@ -53,10 +53,6 @@
     "frozen_memory.c": {
       "sha256": "c47b2d37276e7150934fb8f185329d85c7a7dc22a0150e67c65437ba0e3194d4",
       "size": 13285
-    },
-    "frozen_memory.cp312-win_amd64.pyd": {
-      "sha256": "358e3e04bf157ebf6e454b39cddf58bbded8b5bfc9908d6f64e69ec41ea087fd",
-      "size": 15360
     },
     "frozen_memory_fallback.py": {
       "sha256": "7863a120f50e11fd00e53363256a8a8c254ac30a7f1ed5807e3821447694768e",

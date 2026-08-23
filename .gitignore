@@ -25,3 +25,13 @@ Untitled-1.txt
 del
 benchmark_results.csv
 data/
+
+# audit tooling artefacts: worklists, per-target reports, the staged wheel and
+# the scratch directories the container mounts. The scripts are tracked; what
+# they produce is not.
+tools/reports/
+tools/out/
+tools/verify/
+tools/worklist.json
+tools/shortlist.json
+tools/*.whl

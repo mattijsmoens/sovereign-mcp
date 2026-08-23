@@ -2,6 +2,34 @@
 
 All notable changes to sovereign-mcp are documented here.
 
+## [2.0.0] — 2026-08-23
+
+### Removed
+
+- **`sovereign-mcp-audit` has moved to its own package.**
+
+      pip install sovereign-mcp-audit
+
+  It is **Apache 2.0** now, not BSL. The auditor imported nothing from this
+  library and nothing here imported it, and it used none of the patented
+  technology — no FrozenNamespace, no consensus, no canonical hashing, no memory
+  protection. There was no reason for it to be licensed like the library, and
+  every reason not to: a tool whose job is to show people what their agents can
+  reach is worth more unrestricted than licensed.
+
+  Standing alone it also declares the MCP SDK as a real dependency instead of an
+  optional extra, which fixes structurally a bug this package could only paper
+  over: `pip install sovereign-mcp` produced a `sovereign-mcp-audit` command
+  that died with `ModuleNotFoundError: anyio`.
+
+  `sovereign_mcp.audit` remains as a stub that prints where the tool went and
+  exits non-zero, so an existing entry point says something useful rather than
+  disappearing. It will be removed in a future release.
+
+  **This is why the major version moved.** Nothing else in the library changed:
+  `from sovereign_mcp.audit import ...` no longer works, and neither does the
+  old command.
+
 ## [1.6.0] — 2026-08-23
 
 ### Fixed
